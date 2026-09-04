@@ -1,0 +1,46 @@
+name: Deploy Database Migrations
+
+# Manual-only trigger. Prisma migrations must never run automatically as
+# part of the Vercel build (see next.config.mjs / package.json build
+# script, which only runs `next build`) - this workflow is the single,
+# explicit, human-triggered path that is allowed to change production
+# schema. Anyone running this must have write access to the repository and
+# select the correct target environment.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (must match a configured GitHub Environment with DATABASE_URL/DIRECT_URL secrets)"
+        required: true
+        type: choice
+        options:
+          - production
+          - preview
+
+jobs:
+  migrate:
+    name: prisma migrate deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Verify migration status
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate status

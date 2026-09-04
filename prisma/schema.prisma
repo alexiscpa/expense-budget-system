@@ -1,0 +1,493 @@
+// Expense Budget System - Prisma schema
+// Money fields use Decimal(18,2) to avoid floating point rounding errors.
+// This schema is the source of truth for the data model described in
+// docs/requirements-traceability.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection (PgBouncer) - used by the running application.
+  url       = env("DATABASE_URL")
+  // Direct/unpooled connection - required by Prisma Migrate.
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SYSTEM_ADMIN
+  BUDGET_OWNER
+  DEPARTMENT_EDITOR
+  DEPARTMENT_REVIEWER
+  FINANCE_REVIEWER
+  FINANCE_APPROVER
+  READ_ONLY
+  AUDITOR
+}
+
+enum DeptClass {
+  P // 生產
+  R // 研發
+  S // 營業
+  M // 管理
+  UNCLASSIFIED // 待確認，不計入四大類彙總，僅計入總計
+}
+
+enum AccountEntryType {
+  FORMULA // 公式自動計算
+  NOT_BUDGETED // 不編列，固定為 0
+  DEPARTMENT_INPUT // 部門主管參考前期金額自行填列
+}
+
+enum AccountCommonCategory {
+  PERSONNEL // 人事費用
+  OFFICE // 辦公費用
+  SG_AND_A // 銷管費用
+  OTHER // 其他費用
+}
+
+enum BudgetStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  RETURNED
+  APPROVED
+  LOCKED
+  ADJUSTMENT_PENDING
+  ADJUSTED
+  REJECTED
+}
+
+enum FormulaStatus {
+  NOT_APPLICABLE // 非公式科目
+  CONFIGURED
+  NOT_CONFIGURED // 公式或薪資資料來源尚未設定，畫面顯示「尚未設定」，禁止送審
+}
+
+enum ImportEntityType {
+  ACCOUNT
+  DEPARTMENT
+  USER
+  BUDGET_LINES
+}
+
+enum ImportBatchStatus {
+  PENDING
+  VALIDATED
+  FAILED
+  COMMITTED
+  ROLLED_BACK
+}
+
+enum MemoryType {
+  PRIOR_YEAR_APPROVED_BUDGET
+  PRIOR_YEAR_ACTUAL
+  SUBMISSION_VERSION
+  USER_DRAFT
+  RETURN_REASON
+  MANUAL_ADJUSTMENT
+  QUERY_PREFERENCE
+  FIELD_PREFERENCE
+  PERIOD_VARIANCE
+  AMOUNT_PERCENT_VARIANCE
+}
+
+enum DualControlAction {
+  UNLOCK_BUDGET
+  ROLE_CHANGE
+  EXPORT_APPROVED_REPORT
+  DELETE_AUDIT_RESTRICTED
+}
+
+enum DualControlStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// ---------------------------------------------------------------------------
+// Identity & access
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String
+  name              String
+  role              Role
+  // true for company-wide roles (finance / admin / auditor / read-only granted globally).
+  // Department-scoped roles (BUDGET_OWNER / DEPARTMENT_EDITOR / DEPARTMENT_REVIEWER)
+  // must instead be granted access via UserDepartmentScope rows.
+  companyWide       Boolean   @default(false)
+  isActive          Boolean   @default(true)
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  mustResetPassword Boolean   @default(false)
+  // Reserved integration points for future company SSO / MFA (see SECURITY.md).
+  ssoSubject        String?   @unique
+  mfaEnabled        Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  departmentScopes     UserDepartmentScope[]
+  preparedVersions     BudgetVersion[]       @relation("PreparedBy")
+  submittedVersions    BudgetVersion[]       @relation("SubmittedBy")
+  reviewedVersions     BudgetVersion[]       @relation("ReviewedBy")
+  approvedVersions     BudgetVersion[]       @relation("ApprovedBy")
+  auditLogs            AuditLog[]
+  memoryEntries        MemoryEntry[]
+  aiConfirmedMemories  MemoryEntry[]         @relation("AiConfirmedBy")
+  importBatches        ImportBatch[]
+  passwordResets       PasswordResetToken[]
+  dualControlRequests  DualControlRequest[]  @relation("DualControlRequestedBy")
+  dualControlApprovals DualControlRequest[]  @relation("DualControlApprovedBy")
+
+  @@index([role])
+}
+
+// Explicit grant of a department-scoped user to one department. A user may
+// hold scopes in multiple departments (e.g. covering for a peer) but never
+// gains access outside these rows plus role-based company-wide access.
+model UserDepartmentScope {
+  id           String   @id @default(cuid())
+  userId       String
+  departmentId String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, departmentId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  email     String
+  success   Boolean
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Master data: departments & chart of accounts
+// ---------------------------------------------------------------------------
+
+model Department {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  class     DeptClass
+  isActive  Boolean   @default(true)
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  userScopes     UserDepartmentScope[]
+  budgetVersions BudgetVersion[]
+  salaryDataRows SalaryDataSource[]
+  memoryEntries  MemoryEntry[]
+
+  @@index([class])
+}
+
+model Account {
+  id             String                @id @default(cuid())
+  code           String                @unique
+  name           String
+  majorCategory  DeptClass
+  commonCategory AccountCommonCategory
+  entryType      AccountEntryType
+  formulaKey     String?
+  isActive       Boolean               @default(true)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  budgetLines BudgetLine[]
+
+  @@index([majorCategory])
+  @@index([entryType])
+}
+
+model FormulaDefinition {
+  id            String    @id @default(cuid())
+  key           String
+  version       Int
+  description   String
+  // Structured, machine-evaluable expression definition (JSON). Kept as a
+  // versioned, effective-dated record so historical budget runs remain
+  // reproducible even after formulas change.
+  expression    Json
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  isActive      Boolean   @default(true)
+  createdById   String
+  createdAt     DateTime  @default(now())
+
+  @@unique([key, version])
+  @@index([key, isActive])
+}
+
+// Payroll basis used by FORMULA accounts (e.g. bonuses derived from base
+// salary). If a department/year/month row is missing, dependent formula
+// accounts must be treated as NOT_CONFIGURED, never silently 0.
+model SalaryDataSource {
+  id              String   @id @default(cuid())
+  departmentId    String
+  fiscalYear      Int
+  month           Int
+  totalBaseSalary Decimal  @db.Decimal(18, 2)
+  employeeCount   Int
+  isConfirmed     Boolean  @default(false)
+  source          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  @@unique([departmentId, fiscalYear, month])
+}
+
+// ---------------------------------------------------------------------------
+// Budget workflow
+// ---------------------------------------------------------------------------
+
+model BudgetVersion {
+  id            String       @id @default(cuid())
+  departmentId  String
+  fiscalYear    Int
+  versionNumber Int
+  status        BudgetStatus @default(DRAFT)
+
+  // Adjustment chain: an approved/locked version being adjusted spawns a new
+  // version referencing it as parent. The parent is never overwritten.
+  parentVersionId String?
+  parentVersion   BudgetVersion?  @relation("AdjustmentChain", fields: [parentVersionId], references: [id])
+  childVersions   BudgetVersion[] @relation("AdjustmentChain")
+
+  preparedById  String?
+  submittedById String?
+  reviewedById  String?
+  approvedById  String?
+
+  submittedAt     DateTime?
+  reviewStartedAt DateTime?
+  returnedAt      DateTime?
+  returnReason    String?
+  approvedAt      DateTime?
+  lockedAt        DateTime?
+  rejectedAt      DateTime?
+  rejectReason    String?
+
+  adjustmentReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department  Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  preparedBy  User?      @relation("PreparedBy", fields: [preparedById], references: [id])
+  submittedBy User?      @relation("SubmittedBy", fields: [submittedById], references: [id])
+  reviewedBy  User?      @relation("ReviewedBy", fields: [reviewedById], references: [id])
+  approvedBy  User?      @relation("ApprovedBy", fields: [approvedById], references: [id])
+
+  lines BudgetLine[]
+
+  @@unique([departmentId, fiscalYear, versionNumber])
+  @@index([departmentId, fiscalYear])
+  @@index([status])
+}
+
+model BudgetLine {
+  id              String @id @default(cuid())
+  budgetVersionId String
+  accountId       String
+
+  // 11-column template fields (docs/budget-system-spec-v0.4.md §1.4)
+  priorPriorYearActual       Decimal  @db.Decimal(18, 2) // 20XX 實績
+  priorYearOriginalBudget    Decimal  @db.Decimal(18, 2) // 20XX 目標
+  currentYearProjection      Decimal? @db.Decimal(18, 2) // 20XX 推移 (null until computable)
+  projectionIsComplete       Boolean  @default(false) // false = 資料不全，待確認
+  nextYearTargetExcludingNew Decimal  @default(0) @db.Decimal(18, 2) // 20XX+1 目標不含新員
+  nextYearNewHireBudget      Decimal  @default(0) @db.Decimal(18, 2) // 20XX+1 目標新員
+  // system-computed, never directly editable by users:
+  nextYearTotal              Decimal  @default(0) @db.Decimal(18, 2) // 合計(含新員)
+  growthRateExcludingNew     Decimal? @db.Decimal(9, 4) // 不含新員成長率
+  growthRateIncludingNew     Decimal? @db.Decimal(9, 4) // 含新員成長率
+
+  entryTypeSnapshot AccountEntryType
+  formulaStatus     FormulaStatus    @default(NOT_APPLICABLE)
+  isLocked          Boolean          @default(false) // true for NOT_BUDGETED / FORMULA lines
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  budgetVersion  BudgetVersion             @relation(fields: [budgetVersionId], references: [id], onDelete: Cascade)
+  account        Account                   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  monthlyActuals BudgetLineMonthlyActual[]
+
+  @@unique([budgetVersionId, accountId])
+  @@index([formulaStatus])
+}
+
+model BudgetLineMonthlyActual {
+  id           String   @id @default(cuid())
+  budgetLineId String
+  year         Int
+  month        Int
+  amount       Decimal? @db.Decimal(18, 2)
+  isMissing    Boolean  @default(false)
+  source       String?
+  createdAt    DateTime @default(now())
+
+  budgetLine BudgetLine @relation(fields: [budgetLineId], references: [id], onDelete: Cascade)
+
+  @@unique([budgetLineId, year, month])
+}
+
+model ConsistencyCheckRun {
+  id              String   @id @default(cuid())
+  fiscalYear      Int
+  departmentTotal Decimal  @db.Decimal(18, 2)
+  accountTotal    Decimal  @db.Decimal(18, 2)
+  difference      Decimal  @db.Decimal(18, 2)
+  passed          Boolean
+  detail          Json
+  runByUserId     String?
+  createdAt       DateTime @default(now())
+
+  @@index([fiscalYear])
+}
+
+// ---------------------------------------------------------------------------
+// Import batches (accounts / departments / users / budget lines)
+// ---------------------------------------------------------------------------
+
+model ImportBatch {
+  id              String            @id @default(cuid())
+  entityType      ImportEntityType
+  fileName        String
+  fileHash        String
+  templateVersion String
+  fiscalYear      Int?
+  uploadedById    String
+  status          ImportBatchStatus @default(PENDING)
+  totalRows       Int               @default(0)
+  successRows     Int               @default(0)
+  errorCount      Int               @default(0)
+  errorReport     Json?
+  committedAt     DateTime?
+  createdAt       DateTime          @default(now())
+
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@unique([entityType, fileHash])
+  @@index([entityType, status])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail (append-only)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  reason      String?
+  beforeData  Json?
+  afterData   Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Business memory (structured, scoped, traceable - not chat-style memory)
+// ---------------------------------------------------------------------------
+
+model MemoryEntry {
+  id                String     @id @default(cuid())
+  type              MemoryType
+  scopeDepartmentId String? // null = company-wide scope (finance/admin only)
+  fiscalYear        Int?
+  source            String // e.g. "system:budget-close", "user:<id>", "import:<batchId>"
+  payload           Json
+
+  createdById String
+  createdAt   DateTime @default(now())
+
+  // Personal-preference type memories may be deleted by their owner.
+  // Audit/business-record types (approved budgets, return reasons, submission
+  // history, manual adjustments) are never user-deletable.
+  isUserDeletable Boolean   @default(false)
+  deletedAt       DateTime?
+
+  // AI-suggested memories must be explicitly confirmed by a human before any
+  // downstream feature may treat them as authoritative draft input. They are
+  // never used to overwrite an official budget directly.
+  aiSuggested     Boolean   @default(false)
+  aiConfirmedById String?
+  aiConfirmedAt   DateTime?
+  overrideReason  String? // required when a user overrides an AI suggestion
+
+  createdBy     User        @relation(fields: [createdById], references: [id])
+  aiConfirmedBy User?       @relation("AiConfirmedBy", fields: [aiConfirmedById], references: [id])
+  department    Department? @relation(fields: [scopeDepartmentId], references: [id])
+
+  @@index([type, scopeDepartmentId, fiscalYear])
+  @@index([createdById])
+}
+
+// ---------------------------------------------------------------------------
+// Dual control / second-approver for high-risk operations
+// ---------------------------------------------------------------------------
+
+model DualControlRequest {
+  id               String            @id @default(cuid())
+  action           DualControlAction
+  targetEntityType String
+  targetEntityId   String
+  reason           String
+  payload          Json?
+  status           DualControlStatus @default(PENDING)
+
+  requestedById String
+  approvedById  String?
+  approvedAt    DateTime?
+  consumedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  requestedBy User  @relation("DualControlRequestedBy", fields: [requestedById], references: [id])
+  approvedBy  User? @relation("DualControlApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([status])
+  @@index([targetEntityType, targetEntityId])
+}
