@@ -12,19 +12,23 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: user
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: expense_budget
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: expense_budget_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U user -d expense_budget"
+          --health-cmd "pg_isready -U postgres -d expense_budget_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: "postgresql://user:password@localhost:5432/expense_budget?schema=public"
-      DIRECT_URL: "postgresql://user:password@localhost:5432/expense_budget?schema=public"
+      # Must match vitest.config.ts's fixed test-DB env exactly - vitest
+      # overrides DATABASE_URL/DIRECT_URL for the actual `npm test` run, so
+      # `prisma migrate deploy` here has to target that same database or the
+      # tests run against an unmigrated (or nonexistent-credential) database.
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/expense_budget_test?schema=public"
+      DIRECT_URL: "postgresql://postgres:postgres@localhost:5432/expense_budget_test?schema=public"
       SESSION_SECRET: "ci-only-session-secret-not-used-in-production-32chars"
       NODE_ENV: "test"
     steps:
