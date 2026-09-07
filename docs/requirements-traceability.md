@@ -131,7 +131,7 @@
 | SEC-7 | 開發指令 §七 | API 輸入使用 schema 驗證 | `src/lib/validation/schemas.ts`（zod），各路由呼叫 `.parse()` | 涵蓋於各功能測試 | ✅ | 是 | - |
 | SEC-8 | 開發指令 §七 | 防 SQL injection/XSS/CSRF/IDOR | Prisma 參數化查詢；React 自動跳脫；`assertSameOrigin`；`requireDepartmentAccess` | `tests/rbac.test.ts`、程式碼審閱 | ✅ | 是 | - |
 | SEC-9 | 開發指令 §七 | 正式環境錯誤訊息不暴露堆疊/資料庫資訊 | `errorResponse()`（一律回傳通用訊息，`console.error` 僅寫入伺服器端日誌） | `tests/health.test.ts`（驗證健康檢查不洩漏錯誤細節） | ✅ | 是 | - |
-| SEC-10 | 開發指令 §七 | 安全 headers | `next.config.mjs`（CSP、HSTS、X-Frame-Options 等） | 程式碼審閱 | ✅ | 是 | - |
+| SEC-10 | 開發指令 §七 | 安全 headers | `next.config.mjs`（CSP、HSTS、X-Frame-Options 等） | 程式碼審閱 + 真實瀏覽器驗收（見 README「真實瀏覽器驗收」） | ✅ | 是 | 曾於真實瀏覽器驗收時發現開發模式 CSP 缺少 `unsafe-eval` 導致前端 JS 完全無法執行，已修復為僅開發模式放行，正式環境（`next start`）維持嚴格 CSP，已重新驗證 |
 | SEC-11 | 開發指令 §七 | 為未來 SSO/MFA 預留介面 | `User.ssoSubject`、`User.mfaEnabled` 欄位保留 | 架構審閱 | 🟡 | - | 明確**未實作** SSO/MFA 本身（依指示不做假功能）。**正式上線阻擋項目**：若公司要求 MFA/SSO 才能上線，需另行整合（見 SECURITY.md「SSO/MFA 整合說明」） |
 
 ---

@@ -49,10 +49,16 @@ export function BudgetVersionClient({
   currentUser,
   version,
   canSeeSalary,
+  availableActions: roleAvailableActions,
 }: {
   currentUser: { id: string; role: Role; companyWide: boolean };
   version: VersionDto;
   canSeeSalary: boolean;
+  /** Actions the signed-in user's role is permitted to attempt on this
+   * status, computed server-side (see page.tsx). The backend re-validates
+   * everything regardless - this only keeps the UI from offering an action
+   * that would just 403. */
+  availableActions: string[];
 }) {
   const router = useRouter();
   const [lines, setLines] = useState(version.lines);
@@ -106,13 +112,12 @@ export function BudgetVersionClient({
     }
   }
 
-  const availableActions: string[] = [];
-  if (version.status === "DRAFT" && !hasUnconfiguredFormula) availableActions.push("submit");
-  if (version.status === "RETURNED" && !hasUnconfiguredFormula) availableActions.push("resubmit");
-  if (version.status === "ADJUSTMENT_PENDING" && !hasUnconfiguredFormula) availableActions.push("submit");
-  if (version.status === "SUBMITTED") availableActions.push("review");
-  if (version.status === "UNDER_REVIEW") availableActions.push("return", "approve", "reject");
-  if (["LOCKED", "ADJUSTED"].includes(version.status)) availableActions.push("adjustment");
+  // Server already filtered this list to what version.status + the user's
+  // role actually permit; here we additionally withhold submit/resubmit
+  // while a FORMULA line is unconfigured (backend blocks it too - this
+  // just avoids offering a button that would immediately error).
+  const blockedByFormula = new Set(hasUnconfiguredFormula ? ["submit", "resubmit"] : []);
+  const availableActions = roleAvailableActions.filter((a) => !blockedByFormula.has(a));
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">

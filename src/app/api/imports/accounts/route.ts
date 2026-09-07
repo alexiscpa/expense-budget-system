@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireUser, errorResponse } from "@/lib/rbac/guard";
+import { requireUser, requireCapability, errorResponse } from "@/lib/rbac/guard";
 import { previewAccountImport, commitAccountImport, hashFileBuffer } from "@/lib/importing/masterDataImport";
 import { assertSameOrigin } from "@/lib/security/csrf";
 
@@ -7,6 +7,10 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await requireUser();
+    // Enforced for preview too, not just commit: master data structure and
+    // accepted enum values should not be probeable by an unprivileged
+    // account even via the read-only preview path.
+    await requireCapability(user, "master_data.import");
     const body = await request.json();
     const rows: unknown[] = body.rows ?? [];
     const mode: "preview" | "commit" = body.mode ?? "preview";

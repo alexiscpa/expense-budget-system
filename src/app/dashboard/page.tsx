@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
-import { getAccessibleDepartmentIds } from "@/lib/rbac/permissions";
+import { getAccessibleDepartmentIds, hasCapability } from "@/lib/rbac/permissions";
+import { CreateDraftForm } from "./CreateDraftForm";
 
 export const dynamic = "force-dynamic";
 
@@ -32,16 +33,22 @@ export default async function DashboardPage() {
     take: 100,
   });
 
+  const canCreateDraft = hasCapability(user.role, "budget.edit_own_department");
+  const creatableDepartments = canCreateDraft
+    ? await prisma.department.findMany({
+        where: {
+          isActive: true,
+          id: accessibleDepartmentIds === null ? undefined : { in: accessibleDepartmentIds },
+        },
+        select: { id: true, name: true, code: true },
+      })
+    : [];
+
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-bold">預算版本總覽</h1>
-        <form action="/api/auth/logout" method="post">
-          <span className="mr-3 text-sm text-slate-500">
-            {user.name}（{user.role}）
-          </span>
-        </form>
-      </div>
+      <h1 className="mb-6 text-xl font-bold">預算版本總覽</h1>
+
+      {canCreateDraft && <CreateDraftForm departments={creatableDepartments} />}
 
       <table className="w-full border-collapse overflow-hidden rounded border border-slate-200 text-sm">
         <thead className="bg-slate-100 text-left">

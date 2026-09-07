@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireUser, errorResponse } from "@/lib/rbac/guard";
+import { requireUser, requireCapability, errorResponse } from "@/lib/rbac/guard";
 import { previewUserImport, commitUserImport, hashFileBuffer } from "@/lib/importing/masterDataImport";
 import { assertSameOrigin } from "@/lib/security/csrf";
 
@@ -7,6 +7,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await requireUser();
+    await requireCapability(user, "user.manage");
     const body = await request.json();
     const rows: unknown[] = body.rows ?? [];
     const mode: "preview" | "commit" = body.mode ?? "preview";

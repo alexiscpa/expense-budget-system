@@ -108,6 +108,27 @@ GitHub Actions 內建的方式另外準備測試環境變數。
 
 測試涵蓋範圍見 [`docs/requirements-traceability.md`](docs/requirements-traceability.md) 第九節「測試與驗收」。
 
+## 真實瀏覽器驗收（dev server + headless Chromium，本次工作階段實際執行）
+
+除上述自動化測試外，另外實際啟動 `npm run dev`（本機 PostgreSQL）與 `npm run build && npm run start`
+（production 模式），以 headless Chromium 透過真實瀏覽器操作，走完整流程：登入 → 建立年度預算草稿 → 填寫
+科目金額（自動存檔）→ 送出申請 → 財務覆核 → 核准 → 鎖定 → 匯出 Excel → 申請預算調整；並驗證角色權限
+（不同角色看到的可執行動作不同）、跨部門/跨權限存取一律 403、FORMULA 科目未設定時畫面顯示「尚未設定」且
+正確隱藏送出按鈕、部門對科目一致性檢核報表、登出流程。
+
+這一輪**真實瀏覽器**驗收發現並修復了 4 個自動化測試未能覆蓋的問題（單元測試著重於 `src/lib/**` 的商業邏輯，
+未涵蓋瀏覽器端 CSP 行為與頁面互動）：
+
+| 發現的問題 | 影響 | 修復 |
+|---|---|---|
+| `next.config.mjs` 的 CSP 在開發模式下缺少 `unsafe-eval` | **開發模式下所有前端 JavaScript 完全無法執行**（Next.js Fast Refresh 需要 `eval`），登入按鈕退化成瀏覽器原生表單送出，功能整個失效 | 依 `NODE_ENV` 條件式加入 `unsafe-eval`：僅開發模式放行，正式環境（`next build`/`next start`）維持嚴格 CSP 不變（已重新以 production 模式驗證） |
+| 預算版本頁的操作按鈕（開始覆核／核准／退回等）不論登入者角色一律依狀態顯示 | 部門主管會看到「開始覆核」「核准」等自己無權限執行的按鈕（點擊會被後端 403 擋下，非安全漏洞，但屬功能缺陷） | 改由伺服器端（`page.tsx`）依角色權限計算可執行動作清單，再傳給前端元件渲染，前端不再自行依狀態猜測 |
+| `/api/imports/{accounts,departments,users}` 的 `preview` 模式未做權限檢查（僅 `commit` 有檢查） | 任何已登入使用者皆可呼叫匯入預覽端點（雖不觸及資料庫、無資料外洩，但違反「後端一律驗證權限」原則） | 三個匯入路由皆在處理請求最前面加上 `requireCapability`，`preview` 與 `commit` 一致受權限保護 |
+| Dashboard 找不到「建立新年度預算草稿」與「登出」的可點擊入口 | 部門主管無法自行建立草稿（僅能透過 API），使用者也無法從介面登出 | 新增 `CreateDraftForm`（依角色與部門權限顯示）與 `LogoutButton`，並整併進 `src/app/dashboard/layout.tsx` 的共用頁首，所有 `/dashboard/*` 頁面皆可存取 |
+
+修復後已重新執行完整迴歸：`npm run lint`／`npx tsc --noEmit`／`npm test`（53 測試全數通過）／`npm run build`
+皆再次確認通過，並重新以真實瀏覽器走完整流程確認一致。
+
 ## 部署文件
 
 - [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) — Vercel 環境變數、build 設定、回滾、migration 失敗處理
