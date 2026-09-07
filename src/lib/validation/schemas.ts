@@ -22,6 +22,8 @@ export const createDraftSchema = z.object({
 export const updateLineSchema = z.object({
   nextYearTargetExcludingNew: z.string().regex(/^\d+(\.\d{1,2})?$/, "請輸入正確的金額格式"),
   nextYearNewHireBudget: z.string().regex(/^\d+(\.\d{1,2})?$/, "請輸入正確的金額格式"),
+  // 說明／編列依據 - optional; omit to leave unchanged, empty string to clear.
+  justification: z.string().max(2000, "說明過長").optional(),
 });
 
 export const reasonSchema = z.object({

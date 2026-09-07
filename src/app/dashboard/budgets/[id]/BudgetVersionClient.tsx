@@ -1,14 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ClientApiError } from "@/lib/client/api";
-import type { Role } from "@prisma/client";
+import { computeCategorySummary, CATEGORY_LABELS } from "@/lib/budget/categorySummary";
+import type { Role, AccountCommonCategory } from "@prisma/client";
 
 interface LineDto {
   id: string;
   accountId: string;
-  account: { code: string; name: string; entryType: string };
+  account: {
+    code: string;
+    name: string;
+    entryType: string;
+    commonCategory: AccountCommonCategory;
+    isProvisionalCode: boolean;
+    sourceSeq: number | null;
+  };
   priorPriorYearActual: string;
   priorYearOriginalBudget: string;
   currentYearProjection: string | null;
@@ -21,6 +29,7 @@ interface LineDto {
   entryTypeSnapshot: string;
   formulaStatus: "NOT_APPLICABLE" | "CONFIGURED" | "NOT_CONFIGURED";
   isLocked: boolean;
+  justification: string | null;
 }
 
 interface VersionDto {
@@ -45,6 +54,12 @@ const ACTION_LABEL: Record<string, string> = {
   adjustment: "申請預算調整",
 };
 
+function formatAmount(value: string): string {
+  const num = Number(value);
+  if (Number.isNaN(num)) return value;
+  return num.toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
 export function BudgetVersionClient({
   currentUser,
   version,
@@ -63,14 +78,37 @@ export function BudgetVersionClient({
 
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
+  const hasProvisionalCodes = lines.some((l) => l.account.isProvisionalCode);
 
-  async function saveLine(line: LineDto, excludingNew: string, newHire: string) {
+  // Always recomputed fresh from the current line amounts - never a stored
+  // subtotal - so this stays live as the user edits each 2026 figure.
+  const summary2026 = useMemo(
+    () =>
+      computeCategorySummary(
+        lines.map((l) => ({ commonCategory: l.account.commonCategory, amount: l.nextYearTotal }))
+      ),
+    [lines]
+  );
+  const summary2025Reference = useMemo(
+    () =>
+      computeCategorySummary(
+        lines.map((l) => ({ commonCategory: l.account.commonCategory, amount: l.priorYearOriginalBudget }))
+      ),
+    [lines]
+  );
+
+  async function saveLine(
+    line: LineDto,
+    excludingNew: string,
+    newHire: string,
+    justification: string
+  ) {
     setBusy(true);
     setError(null);
     try {
       const result = await apiFetch<{ line: LineDto }>(`/api/budgets/${version.id}/lines/${line.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire }),
+        body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire, justification }),
       });
       setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, ...result.line } : l)));
     } catch (err) {
@@ -131,22 +169,45 @@ export function BudgetVersionClient({
           仍有公式科目尚未設定（顯示為「尚未設定」），無法送出或核准，請聯絡財務管理員完成公式與薪資資料來源設定。
         </p>
       )}
+      {hasProvisionalCodes && (
+        <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          本頁部分科目使用「暫用測試代碼」（如 FIN-xxx），僅為來源檔案序號對應之測試用識別碼，
+          <strong>待正式會計科目代碼確認</strong>，尚非正式會計科目代碼。
+        </p>
+      )}
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
 
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {summary2026.rows.map((row) => (
+          <div key={row.category} className="rounded border border-slate-200 p-3">
+            <p className="text-xs text-slate-500">{row.label}（2026）</p>
+            <p className="text-sm font-semibold">{formatAmount(row.total.toString())}</p>
+            <p className="text-xs text-slate-400">
+              2025 參考：{formatAmount(summary2025Reference.rows.find((r) => r.category === row.category)?.total.toString() ?? "0")}
+            </p>
+          </div>
+        ))}
+        <div className="rounded border border-brand-600 bg-brand-50 p-3">
+          <p className="text-xs text-slate-500">管理費用合計（2026，即時計算）</p>
+          <p className="text-sm font-semibold">{formatAmount(summary2026.grandTotal.toString())}</p>
+          <p className="text-xs text-slate-400">2025 參考：{formatAmount(summary2025Reference.grandTotal.toString())}</p>
+        </div>
+      </div>
+
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1100px] border-collapse text-xs">
+        <table className="w-full min-w-[1500px] border-collapse text-xs">
           <thead className="bg-slate-100 text-left">
             <tr>
+              <th className="px-2 py-2">分類</th>
               <th className="px-2 py-2">科目編號</th>
               <th className="px-2 py-2">項目</th>
-              <th className="px-2 py-2">實績</th>
-              <th className="px-2 py-2">目標</th>
-              <th className="px-2 py-2">推移</th>
-              <th className="px-2 py-2">目標(不含新員)</th>
+              <th className="px-2 py-2">2025推估金額（唯讀）</th>
+              <th className="px-2 py-2">2026預算金額</th>
               <th className="px-2 py-2">目標(新員)</th>
               <th className="px-2 py-2">合計(含新員)</th>
-              <th className="px-2 py-2">不含新員成長率</th>
-              <th className="px-2 py-2">含新員成長率</th>
+              <th className="px-2 py-2">增減金額</th>
+              <th className="px-2 py-2">增減率</th>
+              <th className="px-2 py-2">說明／編列依據</th>
             </tr>
           </thead>
           <tbody>
@@ -226,19 +287,37 @@ function LineRow({
   editable: boolean;
   busy: boolean;
   canSeeSalary: boolean;
-  onSave: (line: LineDto, excludingNew: string, newHire: string) => void;
+  onSave: (line: LineDto, excludingNew: string, newHire: string, justification: string) => void;
 }) {
   const [excludingNew, setExcludingNew] = useState(line.nextYearTargetExcludingNew);
   const [newHire, setNewHire] = useState(line.nextYearNewHireBudget);
+  const [justification, setJustification] = useState(line.justification ?? "");
   const canEditThisLine = editable && !line.isLocked;
+
+  function commit() {
+    onSave(line, excludingNew, newHire, justification);
+  }
+
+  const deltaAmount = Number(line.nextYearTotal) - Number(line.priorYearOriginalBudget);
 
   return (
     <tr className="border-t border-slate-200">
-      <td className="px-2 py-1">{line.account.code}</td>
+      <td className="px-2 py-1">{CATEGORY_LABELS[line.account.commonCategory]}</td>
+      <td className="px-2 py-1">
+        {line.account.code}
+        {line.account.isProvisionalCode && (
+          <span
+            className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800"
+            title="暫用測試代碼，待正式科目代碼確認"
+          >
+            暫用
+          </span>
+        )}
+      </td>
       <td className="px-2 py-1">{line.account.name}</td>
-      <td className="px-2 py-1">{line.priorPriorYearActual}</td>
-      <td className="px-2 py-1">{line.priorYearOriginalBudget}</td>
-      <td className="px-2 py-1">{line.projectionIsComplete ? line.currentYearProjection : "資料不全，待確認"}</td>
+      <td className="px-2 py-1" title="2025 推估金額，僅供參考，唯讀不可修改">
+        {line.projectionIsComplete ? formatAmount(line.priorYearOriginalBudget) : "資料不全，待確認"}
+      </td>
       <td className="px-2 py-1">
         {line.formulaStatus === "NOT_CONFIGURED" ? (
           <span className="font-medium text-red-600">尚未設定</span>
@@ -247,7 +326,7 @@ function LineRow({
             className="w-24 rounded border border-slate-300 px-1"
             value={excludingNew}
             onChange={(e) => setExcludingNew(e.target.value)}
-            onBlur={() => onSave(line, excludingNew, newHire)}
+            onBlur={commit}
             disabled={busy}
           />
         ) : line.entryTypeSnapshot === "FORMULA" && !canSeeSalary ? (
@@ -262,19 +341,33 @@ function LineRow({
             className="w-24 rounded border border-slate-300 px-1"
             value={newHire}
             onChange={(e) => setNewHire(e.target.value)}
-            onBlur={() => onSave(line, excludingNew, newHire)}
+            onBlur={commit}
             disabled={busy}
           />
         ) : (
           line.nextYearNewHireBudget
         )}
       </td>
-      <td className="px-2 py-1 font-medium">{line.nextYearTotal}</td>
+      <td className="px-2 py-1 font-medium">{formatAmount(line.nextYearTotal)}</td>
+      <td className={`px-2 py-1 ${deltaAmount < 0 ? "text-emerald-700" : deltaAmount > 0 ? "text-red-700" : ""}`}>
+        {Number.isFinite(deltaAmount) ? formatAmount(deltaAmount.toString()) : "-"}
+      </td>
       <td className="px-2 py-1">
         {line.growthRateExcludingNew ? `${(Number(line.growthRateExcludingNew) * 100).toFixed(2)}%` : "-"}
       </td>
       <td className="px-2 py-1">
-        {line.growthRateIncludingNew ? `${(Number(line.growthRateIncludingNew) * 100).toFixed(2)}%` : "-"}
+        {canEditThisLine ? (
+          <input
+            className="w-40 rounded border border-slate-300 px-1"
+            value={justification}
+            placeholder="說明／編列依據"
+            onChange={(e) => setJustification(e.target.value)}
+            onBlur={commit}
+            disabled={busy}
+          />
+        ) : (
+          line.justification || "-"
+        )}
       </td>
     </tr>
   );

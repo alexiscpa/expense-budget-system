@@ -84,8 +84,17 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
         }
       }
 
+      // When the account carries a known prior-year reference amount (set
+      // via a controlled import - see Account.priorYearReferenceAmount),
+      // seed both read-only reference columns from it instead of leaving
+      // them at 0/"資料不全，待確認": it doubles as the account's most
+      // recently known "原核定預算" (目標) AND "全年推估數" (推移) for a
+      // department that has not yet had a full multi-column prior-year
+      // import - the same real figure, never a fabricated second number.
+      const referenceAmount = account.priorYearReferenceAmount;
+      const priorYearOriginalBudget = referenceAmount ?? new Decimal(0);
       const derived = deriveLineTotals({
-        priorYearOriginalBudget: 0,
+        priorYearOriginalBudget,
         nextYearTargetExcludingNew: excludingNew,
         nextYearNewHireBudget: 0,
       });
@@ -95,9 +104,9 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
           budgetVersionId: version.id,
           accountId: account.id,
           priorPriorYearActual: 0,
-          priorYearOriginalBudget: 0,
-          currentYearProjection: null,
-          projectionIsComplete: false,
+          priorYearOriginalBudget,
+          currentYearProjection: referenceAmount ?? null,
+          projectionIsComplete: referenceAmount !== null,
           nextYearTargetExcludingNew: excludingNew,
           nextYearNewHireBudget: 0,
           nextYearTotal: derived.nextYearTotal,
@@ -129,7 +138,7 @@ export async function updateDepartmentInputLine(
   user: CurrentUser,
   versionId: string,
   lineId: string,
-  input: { nextYearTargetExcludingNew: string; nextYearNewHireBudget: string }
+  input: { nextYearTargetExcludingNew: string; nextYearNewHireBudget: string; justification?: string | null }
 ) {
   await requireCapability(user, "budget.edit_own_department");
 
@@ -160,6 +169,13 @@ export async function updateDepartmentInputLine(
       nextYearNewHireBudget: newHire,
     });
 
+    // undefined = caller didn't touch this field, leave as-is; "" (after
+    // trim) = explicitly cleared; anything else = the new note. Users may
+    // only ever change the 2026 amount and this note - never the account
+    // name/code/category, which come solely from master data.
+    const trimmedJustification = input.justification?.trim();
+    const justification = input.justification === undefined ? undefined : trimmedJustification === "" ? null : trimmedJustification;
+
     const updated = await tx.budgetLine.update({
       where: { id: lineId },
       data: {
@@ -168,6 +184,7 @@ export async function updateDepartmentInputLine(
         nextYearTotal: derived.nextYearTotal,
         growthRateExcludingNew: derived.growthRateExcludingNew,
         growthRateIncludingNew: derived.growthRateIncludingNew,
+        justification,
       },
     });
 
@@ -180,10 +197,12 @@ export async function updateDepartmentInputLine(
         beforeData: {
           nextYearTargetExcludingNew: line.nextYearTargetExcludingNew.toString(),
           nextYearNewHireBudget: line.nextYearNewHireBudget.toString(),
+          justification: line.justification,
         },
         afterData: {
           nextYearTargetExcludingNew: updated.nextYearTargetExcludingNew.toString(),
           nextYearNewHireBudget: updated.nextYearNewHireBudget.toString(),
+          justification: updated.justification,
         },
       },
       tx as Prisma.TransactionClient
