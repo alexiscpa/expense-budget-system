@@ -6,6 +6,7 @@ import { requireCapability, requireDepartmentAccess, ApiError } from "@/lib/rbac
 import { isEditable } from "@/lib/workflow/stateMachine";
 import { writeAuditLog } from "@/lib/audit/log";
 import { evaluateFormula } from "@/lib/formula/engine";
+import { isTestBypassUser } from "@/lib/auth/testBypass";
 
 export interface DerivedFields {
   nextYearTotal: Decimal;
@@ -53,7 +54,17 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
 
   return prisma.$transaction(async (tx) => {
     const version = await tx.budgetVersion.create({
-      data: { departmentId, fiscalYear, versionNumber: 1, status: "DRAFT", preparedById: user.id },
+      data: {
+        departmentId,
+        fiscalYear,
+        versionNumber: 1,
+        status: "DRAFT",
+        // TEST_BYPASS_USER is a virtual identity never written to the User
+        // table (see lib/auth/testBypass.ts), so its sentinel id must never
+        // be written into this real foreign key - recorded as NULL here,
+        // exactly as writeAuditLog() already does for actorUserId.
+        preparedById: isTestBypassUser(user) ? null : user.id,
+      },
     });
 
     for (const account of accounts) {

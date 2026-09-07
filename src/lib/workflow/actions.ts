@@ -5,6 +5,7 @@ import { requireCapability, requireDepartmentAccess, ApiError } from "@/lib/rbac
 import { assertTransition } from "@/lib/workflow/stateMachine";
 import { writeAuditLog } from "@/lib/audit/log";
 import { sumDecimals, ZERO } from "@/lib/money/decimal";
+import { isTestBypassUser } from "@/lib/auth/testBypass";
 
 async function loadVersionOrThrow(tx: Prisma.TransactionClient, versionId: string) {
   const version = await tx.budgetVersion.findUnique({
@@ -38,12 +39,17 @@ export async function submitBudgetVersion(user: CurrentUser, versionId: string) 
     }
     assertNoUnconfiguredFormulas(version.lines);
 
+    // TEST_BYPASS_USER is never written to the User table (see
+    // lib/auth/testBypass.ts) - these actor-tracking foreign keys are
+    // recorded as NULL for it, exactly as writeAuditLog() already does for
+    // actorUserId, to avoid violating the FK constraint.
+    const actorId = isTestBypassUser(user) ? null : user.id;
     const updated = await tx.budgetVersion.update({
       where: { id: versionId },
       data: {
         status: "SUBMITTED",
-        preparedById: version.preparedById ?? user.id,
-        submittedById: user.id,
+        preparedById: version.preparedById ?? actorId,
+        submittedById: actorId,
         submittedAt: new Date(),
         returnReason: null,
       },
@@ -155,7 +161,11 @@ async function submitResubmitShared(user: CurrentUser, versionId: string, action
 
     const updated = await tx.budgetVersion.update({
       where: { id: versionId },
-      data: { status: "SUBMITTED", submittedById: user.id, submittedAt: new Date() },
+      data: {
+        status: "SUBMITTED",
+        submittedById: isTestBypassUser(user) ? null : user.id,
+        submittedAt: new Date(),
+      },
     });
 
     await writeAuditLog(

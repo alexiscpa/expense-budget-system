@@ -144,9 +144,17 @@ describe("static safety checks - bypass mode never touches auth/RBAC internals",
     expect(source).toMatch(/export async function requireUser/);
     expect(source).toMatch(/export async function requireCapability/);
     expect(source).toMatch(/export async function requireDepartmentAccess/);
-    // No bypass-specific shortcut was spliced into the RBAC guard itself -
-    // the bypass only ever affects what getCurrentUser() returns upstream.
-    expect(source).not.toMatch(/AUTH_DISABLED|isAuthBypassEnabled|TEST_BYPASS/);
+    // The only bypass-specific logic ever spliced into the RBAC guard is a
+    // narrow, explicit allowlist of two budget capabilities for the virtual
+    // TEST_BYPASS_USER identity (see lib/rbac/guard.ts#TEST_BYPASS_EXTRA_CAPABILITIES),
+    // so the Preview demo admin can hand-build a test budget. It must never
+    // reference the raw env-var gate directly (that fail-closed check lives
+    // solely in lib/env.ts#isAuthBypassEnabled), and must never grant
+    // review/approve/return/reject/adjustment capabilities - doing so would
+    // let a single identity bypass segregation-of-duties controls.
+    expect(source).not.toMatch(/AUTH_DISABLED|isAuthBypassEnabled/);
+    expect(source).toMatch(/TEST_BYPASS_EXTRA_CAPABILITIES/);
+    expect(source).not.toMatch(/budget\.approve|budget\.finance_review|budget\.return|budget\.adjustment|budget\.department_review/);
   });
 
   it("rbac/permissions.ts still defines the full role capability matrix - no capability was stripped for bypass", () => {

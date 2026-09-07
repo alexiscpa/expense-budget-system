@@ -2,7 +2,13 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
-import { getAccessibleDepartmentIds } from "@/lib/rbac/permissions";
+import { getAccessibleDepartmentIds, hasCapability } from "@/lib/rbac/permissions";
+import { isTestBypassUser } from "@/lib/auth/testBypass";
+import { isAuthBypassEnabled } from "@/lib/env";
+import { getDemoSeedStatus } from "@/lib/demo/seedDemoMasterData";
+import { DEMO_FISCAL_YEAR } from "@/lib/demo/constants";
+import { DemoSeedPanel } from "./DemoSeedPanel";
+import { CreateBudgetVersionForm } from "./CreateBudgetVersionForm";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +38,20 @@ export default async function DashboardPage() {
     take: 100,
   });
 
+  const bypassActive = isAuthBypassEnabled();
+  const canCreateDraft = hasCapability(user.role, "budget.edit_own_department") || isTestBypassUser(user);
+  const departmentOptions = canCreateDraft
+    ? await prisma.department.findMany({
+        where: {
+          isActive: true,
+          id: accessibleDepartmentIds === null ? undefined : { in: accessibleDepartmentIds },
+        },
+        select: { id: true, code: true, name: true },
+        orderBy: { code: "asc" },
+      })
+    : [];
+  const demoSeedStatus = bypassActive ? await getDemoSeedStatus() : null;
+
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-6 flex items-center justify-between">
@@ -42,6 +62,14 @@ export default async function DashboardPage() {
           </span>
         </form>
       </div>
+
+      {bypassActive && <DemoSeedPanel initialStatus={demoSeedStatus} />}
+      {canCreateDraft && (
+        <CreateBudgetVersionForm
+          departments={departmentOptions}
+          defaultFiscalYear={bypassActive ? DEMO_FISCAL_YEAR : undefined}
+        />
+      )}
 
       <table className="w-full border-collapse overflow-hidden rounded border border-slate-200 text-sm">
         <thead className="bg-slate-100 text-left">

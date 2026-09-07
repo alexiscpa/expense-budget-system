@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser, type CurrentUser } from "@/lib/auth/session";
 import { hasCapability, canAccessDepartment } from "@/lib/rbac/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
+import { isTestBypassUser } from "@/lib/auth/testBypass";
 
 export class ApiError extends Error {
   status: number;
@@ -17,8 +18,23 @@ export async function requireUser(): Promise<CurrentUser> {
   return user;
 }
 
+/**
+ * Extra capabilities granted only to the virtual TEST_BYPASS_USER identity,
+ * on top of whatever its role (SYSTEM_ADMIN) already grants. This exists so
+ * the Preview-only demo admin can create and submit a test budget draft
+ * through the screen. Deliberately does NOT include review/approve/return/
+ * reject/adjustment capabilities - those segregation-of-duties controls stay
+ * exactly as designed for every identity, bypass included. Since a
+ * TEST_BYPASS_USER identity can only ever be the current user when the
+ * fail-closed, Preview-only gate in lib/env.ts lets it through, this never
+ * affects Production or any real user's permissions.
+ */
+const TEST_BYPASS_EXTRA_CAPABILITIES = new Set(["budget.edit_own_department", "budget.submit_own_department"]);
+
 export async function requireCapability(user: CurrentUser, capability: string): Promise<void> {
-  if (!hasCapability(user.role, capability)) {
+  const allowed =
+    hasCapability(user.role, capability) || (isTestBypassUser(user) && TEST_BYPASS_EXTRA_CAPABILITIES.has(capability));
+  if (!allowed) {
     await writeAuditLog({
       actorUserId: user.id,
       action: "ACCESS_DENIED",

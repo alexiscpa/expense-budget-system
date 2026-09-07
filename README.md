@@ -133,6 +133,35 @@ GitHub Actions 內建的方式另外準備測試環境變數。
 上述「未驗證」項目請在具備 `binaries.prisma.sh` 網路存取權限（或已預先產生 Prisma Client）的環境重新執行
 `npm ci && npx prisma generate && npm run typecheck && npm test && npm run build` 後再行確認。
 
+### 本次新增：Preview DEMO 主檔初始化 ＋ 手動建立測試預算
+
+在「Preview 免登入 Demo 模式」基礎上，新增了讓測試管理員在畫面上**親自**建立與輸入測試預算的完整路徑：
+
+- Dashboard 新增「初始化 DEMO 主檔」按鈕（僅在 `isAuthBypassEnabled()` 為真時顯示；後端 `POST /api/demo/seed`
+  同樣以此為硬性前提），建立固定的 1 個 `DEMO-DEPT` 測試部門與 3 個 `DEMO-ACC-*` 一般費用測試科目，以
+  `upsert` 實作、可重複執行不產生重複資料，且從不建立任何 `BudgetVersion`／`BudgetLine`——預算金額必須由
+  使用者在畫面上親自輸入。
+- Dashboard 新增「建立預算版本草稿」表單（部門／年度選擇），呼叫既有的 `POST /api/budgets`。
+- 修正 `TEST_BYPASS_USER`（SYSTEM_ADMIN 虛擬身分）原本缺少 `budget.edit_own_department` /
+  `budget.submit_own_department` 能力、以及會寫入 `BudgetVersion.preparedById`／`submittedById` 這類
+  User 外鍵而違反約束的問題（虛擬身分不寫入 User 資料表是既有設計，這兩個追蹤欄位現在比照稽核紀錄的作法
+  寫為 `NULL`）。刻意**沒有**開放覆核／核准／退回／駁回／調整權限給此虛擬身分，職務分離內控與原設計完全
+  一致，不因免登入模式而放寬。
+
+驗證結果（本次工作階段已具備完整網路與本機 PostgreSQL，如實回報）：
+
+| 指令/項目 | 結果 |
+|---|---|
+| `npx prisma format` / `npx prisma validate` | ✅ 已實際執行，通過 |
+| `npm run lint` | ✅ 0 錯誤、0 警告 |
+| `npm run typecheck` | ✅ 無型別錯誤 |
+| `npm test`（`vitest run`，全部測試檔） | ✅ **14 個測試檔、93 個測試，全數通過**（含新增 `tests/demo-seed.test.ts` 13 項） |
+| `npm run build`（`next build`） | ✅ 成功產出 production build |
+| 實際啟動 `next dev`（`VERCEL_ENV=preview`、`AUTH_DISABLED=true`）並以 HTTP 呼叫實際端點走完整流程 | ✅ 初始化 DEMO 主檔（含重複呼叫驗證冪等）→ 建立預算版本 → 修改科目金額 → 重新讀取確認持久化 → 送出審核，全部成功；稽核紀錄逐筆確認 `actorUserId` 為 `NULL` 且 `reason` 含 `[TEST_BYPASS_USER]` |
+
+已知限制（既有架構，非本次引入）：會計科目為全公司共用主檔（非按部門區分），建立 DEMO 預算版本時會套用當下
+系統中所有作用中科目；若系統已有其他 `FORMULA` 科目尚未設定公式，會一併出現在 DEMO 預算版本中並阻擋送出。
+
 ## 部署文件
 
 - [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) — Vercel 環境變數、build 設定、回滾、migration 失敗處理
