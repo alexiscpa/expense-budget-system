@@ -1,8 +1,9 @@
 import "server-only";
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-import { getEnv, isProduction } from "@/lib/env";
+import { getEnv, isProduction, isAuthBypassEnabled } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
+import { testBypassUser } from "@/lib/auth/testBypass";
 import type { Role } from "@prisma/client";
 
 const SESSION_COOKIE = "ebs_session";
@@ -64,6 +65,12 @@ export interface CurrentUser {
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
+  // Test-only bypass: short-circuits before any cookie/DB access. See
+  // lib/env.ts#isAuthBypassEnabled for the fail-closed rules governing when
+  // this can ever be true, and lib/auth/testBypass.ts for why this identity
+  // is fully virtual (no DB row, no password).
+  if (isAuthBypassEnabled()) return testBypassUser();
+
   const session = await readSession();
   if (!session) return null;
   const user = await prisma.user.findUnique({ where: { id: session.sub } });

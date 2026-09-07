@@ -24,6 +24,7 @@ Client 型別，**不會連線資料庫、不會執行 migration**），這是 P
 | `SESSION_SECRET` | 一組僅用於 Production 的高強度隨機值（`openssl rand -base64 48`） | 一組僅用於 Preview 的隨機值（不可與 Production 相同） | 簽署 session cookie 的密鑰，切勿共用 |
 | `NODE_ENV` | `production`（Vercel 預設會自動注入，通常不需手動設定） | 同上 | - |
 | `APP_BASE_URL` | 正式網域，例如 `https://budget.example.com` | 該次 Preview 的網址（Vercel 會提供 `VERCEL_URL`，可視需要於程式中組合） | 用於信件連結等絕對網址 |
+| `AUTH_DISABLED` | **不要設定**（或設為 `false`） | `true`（僅在需要 Demo 免登入測試模式時設定） | 見第 9 節，Production 即使誤設也不會生效 |
 
 所有變數皆透過 Vercel 後台或 `vercel env` CLI 設定，**絕不**寫入任何會被提交到 Git 的檔案（`.env`／
 `.env.local` 已列在 `.gitignore`）。
@@ -108,3 +109,39 @@ Vercel 保留每次部署的完整歷史記錄：
    或 `--rolled-back <migration_name>` 手動標記該筆 migration 的狀態（依實際資料庫現況判斷是否已真的套用），
    此為**破壞性判斷操作**，執行前務必先以 `psql` 或 Neon Console 檢查資料庫目前的實際結構，並知會團隊。
 5. 修正後重新執行 workflow，並再次以 `npx prisma migrate status` 確認一致。
+
+## 9. Demo 測試環境（Preview 專用免登入模式）— P0 上線阻擋項目
+
+系統支援一個**僅限 Preview 部署**使用的免登入 Demo 模式，用途是讓非工程人員在 PR/分支的 Preview 網址上快速
+點閱系統功能，不需要建立測試帳號密碼。**此設定列為 P0 上線阻擋項目**：每次正式上線前必須確認 Production
+環境變數中沒有殘留 `AUTH_DISABLED=true`。判斷邏輯集中於 `src/lib/env.ts` 的 `isAuthBypassEnabled()`：
+
+```
+若 VERCEL_ENV === "production"        → 一律關閉（無論 AUTH_DISABLED 為何，無法覆蓋）
+否則若 AUTH_DISABLED !== "true"        → 關閉
+否則（AUTH_DISABLED === "true"）       → 僅當 VERCEL_ENV === "preview" 時才開啟
+```
+
+**啟用方式**：僅在 Vercel Project Settings → Environment Variables 的 **Preview** 分頁新增
+`AUTH_DISABLED=true`。**絕對不要**在 **Production** 分頁設定此變數——即使誤設，程式邏輯也會忽略它，
+但仍應避免造成混淆，且應定期檢查 Production 環境變數清單中沒有殘留此設定。**本系統不存在名為
+`ALLOW_PRODUCTION_AUTH_BYPASS` 或任何其他名稱的第二開關**——Production 的免登入判斷沒有任何覆蓋機制，
+這是刻意的設計決策，避免日後有人以為多設一個環境變數就能在正式環境繞過登入。
+
+**啟用後的行為**：
+- 免登入，自動以虛擬「測試管理員」（`TEST_BYPASS_USER`）身分進入系統，此身分**不對應任何資料庫使用者**，
+  未使用任何預設密碼，也不會因啟用此模式而觸發 `prisma db seed`。
+- 網站頂端固定顯示紅色提示列「Demo 測試環境，禁止輸入正式資料」。
+- `/login` 顯示「目前已啟用 Demo 測試環境免登入模式」與返回首頁按鈕，不出現帳密輸入表單。
+- 所有稽核紀錄（`AuditLog`）的 `actorUserId` 一律寫入 `NULL`（不會冒充任何真實使用者 id），並在
+  `reason` 欄位標記 `[TEST_BYPASS_USER]`，方便日後查核哪些資料列來自 Demo 測試操作。
+
+**上線前必移除／必檢查項目**：
+- Vercel **Production** 環境變數中不得出現 `AUTH_DISABLED=true`（正常情況下即使出現也不會生效，但仍列為
+  上線檢查清單項目，避免組態混亂）。
+- Preview 環境變數的 `DATABASE_URL` / `DIRECT_URL` **必須**指向 Neon 的測試/預覽分支，**絕不可**指向
+  Production 分支（見第 2 節環境變數表格與 `NEON_SETUP.md` 第 3 節）。建議直接啟用 Neon 官方的
+  Vercel 整合「Automatically create a database branch for each preview deployment」，讓每次 Preview
+  都拿到一個全新、互相隔離、與 Production 完全無關的 Neon 分支，從架構上避免免登入模式誤觸正式資料。
+- 因為 Demo 身分等同 `SYSTEM_ADMIN` 且不受帳密保護，Preview 網址應視同**公開可寫入的測試環境**，不得
+  存放任何真實部門、真實員工或真實財務數字（無論是否啟用 `AUTH_DISABLED`，Preview 資料庫都不應含真實資料）。

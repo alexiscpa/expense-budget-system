@@ -1,69 +1,30 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { apiFetch, ClientApiError } from "@/lib/client/api";
+import Link from "next/link";
+import { isAuthBypassEnabled } from "@/lib/env";
+import { LoginForm } from "./LoginForm";
 
 export default function LoginPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-    try {
-      await apiFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
-      router.push("/dashboard");
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof ClientApiError ? err.message : "登入失敗，請稍後再試");
-    } finally {
-      setLoading(false);
-    }
+  // Test-only bypass: show a clear notice instead of the credential form.
+  // See lib/env.ts#isAuthBypassEnabled for the fail-closed, Preview-only
+  // rules governing when this can ever be true (Production is always
+  // excluded, regardless of AUTH_DISABLED).
+  if (isAuthBypassEnabled()) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-sm flex-col items-center justify-center gap-4 px-6 text-center">
+        <h1 className="text-xl font-bold">目前已啟用 Demo 測試環境免登入模式</h1>
+        <p className="text-sm text-slate-600">
+          此 Preview 部署為功能測試環境，已略過登入步驟。所有操作皆以「測試管理員」虛擬身分執行，
+          不會使用任何真實帳號密碼，相關稽核紀錄會標記為 TEST_BYPASS_USER。正式環境（Production）
+          恆維持原本登入保護，不受此設定影響。
+        </p>
+        <Link
+          href="/"
+          className="rounded bg-brand-600 px-4 py-2 text-white hover:bg-brand-700"
+        >
+          返回首頁
+        </Link>
+      </main>
+    );
   }
 
-  return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-4 px-6">
-      <h1 className="text-xl font-bold">系統登入</h1>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          電子郵件
-          <input
-            type="email"
-            required
-            autoComplete="username"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="rounded border border-slate-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          密碼
-          <input
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="rounded border border-slate-300 px-3 py-2"
-          />
-        </label>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={loading}
-          className="rounded bg-brand-600 px-4 py-2 text-white hover:bg-brand-700 disabled:opacity-50"
-        >
-          {loading ? "登入中..." : "登入"}
-        </button>
-      </form>
-      <a href="/reset-password" className="text-sm text-brand-600 hover:underline">
-        忘記密碼？
-      </a>
-    </main>
-  );
+  return <LoginForm />;
 }
