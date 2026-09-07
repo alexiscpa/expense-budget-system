@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { isAuthBypassEnabled } from "@/lib/env";
 
 const SESSION_COOKIE = "ebs_session";
 const PROTECTED_PREFIXES = ["/dashboard"];
@@ -14,6 +15,13 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
   if (!isProtected) return NextResponse.next();
+
+  // Test-only bypass: skip the login redirect entirely. getCurrentUser()
+  // (called by every protected page) independently checks the same
+  // fail-closed isAuthBypassEnabled() rule and returns the virtual test
+  // admin identity, so the two layers can never disagree about whether
+  // bypass mode is active.
+  if (isAuthBypassEnabled()) return NextResponse.next();
 
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const key = secretKey();

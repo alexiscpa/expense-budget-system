@@ -22,6 +22,27 @@
 | Excel 公式注入防護 | 匯出時對危險前綴字元（`=`、`+`、`-`、`@`）加註escape；匯入時拒絕含公式的儲存格 | `src/lib/excel/sanitize.ts` |
 | 稽核紀錄不可竄改 | `AuditLog` 沒有任何 API 提供 update/delete；`tests/audit.test.ts` 以掃描全部 API route 原始碼的方式驗證此不變性 | `src/lib/audit/log.ts` |
 
+## Demo 測試環境免登入模式（僅限 Vercel Preview）— P0 上線阻擋項目
+
+為了讓非工程人員可在 Preview 部署上快速點閱系統功能，系統支援一個**只在 Vercel Preview 環境**生效的免登入
+模式，詳見 `VERCEL_DEPLOYMENT.md` 第 9 節。此設定列為**P0 上線阻擋項目**：每次正式上線前，必須確認
+Vercel Production 環境變數中沒有殘留 `AUTH_DISABLED=true`。摘要其安全設計：
+
+- 判斷邏輯集中於單一函式 `isAuthBypassEnabled()`（`src/lib/env.ts`），Production 環境（`VERCEL_ENV=production`）
+  一律硬性擋下，**不存在任何名為 `ALLOW_PRODUCTION_AUTH_BYPASS` 或其他名稱的第二開關**可以覆蓋這個硬性擋下；
+  本機開發與其他非 Vercel 環境（`VERCEL_ENV` 未設定）也一律關閉。
+- 啟用時使用的「測試管理員」為完全虛擬身分（`src/lib/auth/testBypass.ts`），未寫入資料庫、未使用任何預設
+  密碼，也不會觸發 seed。
+- 稽核紀錄（`AuditLog`）在此模式下一律將 `actorUserId` 寫為 `NULL`（絕不冒充真實使用者 id），並於 `reason`
+  標記 `[TEST_BYPASS_USER]`，見 `src/lib/audit/log.ts`。
+- 既有登入表單、Session／JWT 簽發、密碼雜湊、RBAC 權限矩陣等程式碼完全未被移除或繞過——此模式只影響
+  `getCurrentUser()` 在符合前述嚴格條件時提前回傳虛擬身分，一般環境下的行為與程式路徑不受影響。
+- 啟用時畫面固定顯示「Demo 測試環境，禁止輸入正式資料」；**測試操作禁止輸入任何真實員工、薪資、預算或其他
+  公司敏感資料**，Preview 資料庫本身也應視為測試資料庫，不得存放正式資料（見下方「上線前必檢查」）。
+
+**上線前必檢查**：Vercel Production 環境變數中不得出現 `AUTH_DISABLED=true`；Preview 環境變數的
+`DATABASE_URL`／`DIRECT_URL` 必須指向 Neon 測試/預覽分支，不可指向 Production 分支。
+
 ## SSO / MFA 整合說明（正式上線阻擋項目，尚未實作）
 
 依開發指令明確指示：「如果現階段無法安全完成 MFA 或 SSO，請不要做假的功能；列為正式上線阻擋項目」。因此本專案

@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
+import { TEST_BYPASS_USER_ID } from "@/lib/auth/testBypass";
 import type { Prisma } from "@prisma/client";
+
+const TEST_BYPASS_MARKER = "[TEST_BYPASS_USER]";
 
 export interface AuditEntry {
   actorUserId: string | null;
@@ -20,13 +23,23 @@ export interface AuditEntry {
  */
 export async function writeAuditLog(entry: AuditEntry, tx?: Prisma.TransactionClient) {
   const client = tx ?? prisma;
+  // The virtual test-bypass identity (see lib/auth/testBypass.ts) has no row
+  // in the User table, so its sentinel id must never be written into the
+  // actorUserId foreign key - that would either violate the FK constraint or,
+  // worse, silently collide with a real user id if one were ever reused.
+  // Instead: actorUserId is forced to NULL and an unambiguous marker is
+  // stamped into `reason`, so bypass-mode actions are always distinguishable
+  // from - and can never impersonate - a real person in the audit trail.
+  const isBypassActor = entry.actorUserId === TEST_BYPASS_USER_ID;
   await client.auditLog.create({
     data: {
-      actorUserId: entry.actorUserId,
+      actorUserId: isBypassActor ? null : entry.actorUserId,
       action: entry.action,
       entityType: entry.entityType,
       entityId: entry.entityId ?? null,
-      reason: entry.reason ?? null,
+      reason: isBypassActor
+        ? [TEST_BYPASS_MARKER, entry.reason].filter(Boolean).join(" ")
+        : entry.reason ?? null,
       beforeData: toJson(entry.beforeData),
       afterData: toJson(entry.afterData),
       ipAddress: entry.ipAddress ?? null,

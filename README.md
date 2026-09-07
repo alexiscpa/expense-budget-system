@@ -108,6 +108,31 @@ GitHub Actions 內建的方式另外準備測試環境變數。
 
 測試涵蓋範圍見 [`docs/requirements-traceability.md`](docs/requirements-traceability.md) 第九節「測試與驗收」。
 
+### 本次新增：Preview 免登入 Demo 模式（本次工作階段實際執行結果）
+
+以下是「Preview 專用免登入 Demo 模式」這次變更在**本次工作階段**中**實際執行**的結果，如同上方原則，
+未實際執行的項目一律誠實列為「未驗證」，不宣稱通過：
+
+| 指令/項目 | 結果 |
+|---|---|
+| `npm run lint`（`eslint . --max-warnings=0`，含本次新增/修改的全部檔案） | ✅ 0 錯誤、0 警告，**已實際執行** |
+| `tests/auth-bypass.test.ts`（不依賴資料庫／Prisma engine 的純邏輯測試，直接以 `npx vitest run` 執行） | ✅ **23 個測試，全數通過，已實際執行** |
+| `tests/auth-bypass-db.test.ts`（需要真實資料庫連線＋已產生的 Prisma Client 的測試，如虛擬身分未寫入
+  User 資料表、稽核紀錄 `actorUserId`/`reason` 標記） | ⚠️ **未執行**——本次工作階段的網路環境無法連線
+  `binaries.prisma.sh`（`x-deny-reason: host_not_allowed`），僅匯入 `@/lib/prisma` 就會在模組載入階段
+  丟出 `@prisma/client did not initialize yet`，連測試都無法開始收集，非測試邏輯本身的問題。已將這類
+  測試獨立成單一檔案，方便下一個有完整網路權限的階段單獨執行並回報結果。 |
+| `npm run typecheck`（`tsc --noEmit`） | ⚠️ **未完整執行**——同上述 Prisma Client 未產生的原因，會在既有
+  （本次未修改的）多個檔案報 `Role`／`Prisma.InputJsonValue` 等型別缺失錯誤；已確認錯誤清單皆屬既有檔案，
+  非本次新增程式碼造成。 |
+| `npm test`（`vitest run`，全部測試檔） | ⚠️ **未完整執行**——同上，任何會匯入 `@/lib/prisma` 的測試檔（含
+  本次新增的 `tests/auth-bypass-db.test.ts` 與既有絕大多數測試檔）皆無法在本環境載入。 |
+| `npm run build`（`next build`） | ⚠️ **未完整執行**——webpack/SWC 編譯階段成功，但接續的型別檢查階段因同一
+  Prisma Client 問題而失敗；未產出可部署的 production build。 |
+
+上述「未驗證」項目請在具備 `binaries.prisma.sh` 網路存取權限（或已預先產生 Prisma Client）的環境重新執行
+`npm ci && npx prisma generate && npm run typecheck && npm test && npm run build` 後再行確認。
+
 ## 部署文件
 
 - [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) — Vercel 環境變數、build 設定、回滾、migration 失敗處理
@@ -133,6 +158,9 @@ GitHub Actions 內建的方式另外準備測試環境變數。
 3. 密碼重設信件尚未串接真實 Email 寄送服務。
 4. 若公司要求 MFA/SSO 才能上線，尚未實作（依指示不做假功能，已列為阻擋項目並提供整合建議）。
 5. 海外據點部門的四大類歸屬（v0.4 §6）尚待財務團隊確認。
+6. **Preview 免登入 Demo 模式相關 P0 檢查**（見 `SECURITY.md`／`VERCEL_DEPLOYMENT.md` 第 9 節）：上線前
+   須確認 Vercel Production 環境變數沒有殘留 `AUTH_DISABLED=true`；`tests/auth-bypass-db.test.ts`
+   （需資料庫的稽核紀錄/虛擬身分驗證）尚未在具備完整網路權限的環境執行過，應於下一階段補上。
 
 ## 授權
 
