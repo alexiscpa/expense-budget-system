@@ -1,9 +1,10 @@
+import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import type { CurrentUser } from "@/lib/auth/session";
 import { requireCapability, requireDepartmentAccess, ApiError } from "@/lib/rbac/guard";
 import { assertTransition } from "@/lib/workflow/stateMachine";
-import { writeAuditLog } from "@/lib/audit/log";
+import { writeAuditLog, buildAuditLogData } from "@/lib/audit/log";
 import { sumDecimals, ZERO } from "@/lib/money/decimal";
 import { isTestBypassUser } from "@/lib/auth/testBypass";
 
@@ -287,89 +288,146 @@ export async function rejectBudgetVersion(user: CurrentUser, versionId: string, 
   });
 }
 
+/**
+ * Copies every BudgetLine (and each line's BudgetLineMonthlyActual rows)
+ * from the parent version into a new ADJUSTMENT_PENDING child version.
+ *
+ * Previously this looped over every line inside an interactive
+ * `prisma.$transaction(async (tx) => ...)`, awaiting one `budgetLine.create`
+ * plus one `budgetLineMonthlyActual.findMany` per line, plus one
+ * `budgetLineMonthlyActual.create` per monthly row found - for a 62-line
+ * department with even a modest amount of monthly actuals history, that is
+ * hundreds of sequential round trips in one transaction, the same class of
+ * bug that caused P2028 ("Transaction already closed") in
+ * createBudgetVersionDraft (see that function's comment for the general
+ * pattern). Rewritten the same way: the parent version/lines and all of
+ * their monthly actuals are read up front with exactly 2 queries (the
+ * per-line `findMany` loop is replaced by a single `findMany` with
+ * `budgetLineId: { in: [...] }`, grouped in memory), then the write is 4
+ * statements - version insert, lines `createMany`, monthly-actuals
+ * `createMany`, memory entry insert, audit log insert - sent together as a
+ * non-interactive Prisma batch transaction with no client-side timeout.
+ */
 export async function requestAdjustment(user: CurrentUser, versionId: string, reason: string) {
   await requireCapability(user, "budget.adjustment.request");
   if (!reason || reason.trim().length === 0) {
     throw new ApiError(422, "正式預算調整申請必須填寫理由");
   }
 
-  return prisma.$transaction(async (tx) => {
-    const version = await loadVersionOrThrow(tx, versionId);
-    await requireDepartmentAccess(user, version.departmentId);
-    assertTransition(version.status, "requestAdjustment");
+  const version = await prisma.budgetVersion.findUnique({ where: { id: versionId }, include: { lines: true } });
+  if (!version) throw new ApiError(404, "找不到此預算版本");
+  await requireDepartmentAccess(user, version.departmentId);
+  assertTransition(version.status, "requestAdjustment");
 
-    const nextVersionNumber = version.versionNumber + 1;
-    const child = await tx.budgetVersion.create({
-      data: {
-        departmentId: version.departmentId,
-        fiscalYear: version.fiscalYear,
-        versionNumber: nextVersionNumber,
-        status: "ADJUSTMENT_PENDING",
-        parentVersionId: version.id,
-        preparedById: user.id,
-        adjustmentReason: reason,
-      },
-    });
+  const childId = randomUUID();
+  const nextVersionNumber = version.versionNumber + 1;
 
-    for (const line of version.lines) {
-      const newLine = await tx.budgetLine.create({
-        data: {
-          budgetVersionId: child.id,
-          accountId: line.accountId,
-          priorPriorYearActual: line.priorPriorYearActual,
-          priorYearOriginalBudget: line.priorYearOriginalBudget,
-          currentYearProjection: line.currentYearProjection,
-          projectionIsComplete: line.projectionIsComplete,
-          nextYearTargetExcludingNew: line.nextYearTargetExcludingNew,
-          nextYearNewHireBudget: line.nextYearNewHireBudget,
-          nextYearTotal: line.nextYearTotal,
-          growthRateExcludingNew: line.growthRateExcludingNew,
-          growthRateIncludingNew: line.growthRateIncludingNew,
-          entryTypeSnapshot: line.entryTypeSnapshot,
-          formulaStatus: line.formulaStatus,
-          isLocked: line.isLocked,
-        },
-      });
-      const monthly = await tx.budgetLineMonthlyActual.findMany({ where: { budgetLineId: line.id } });
-      for (const m of monthly) {
-        await tx.budgetLineMonthlyActual.create({
-          data: {
-            budgetLineId: newLine.id,
-            year: m.year,
-            month: m.month,
-            amount: m.amount,
-            isMissing: m.isMissing,
-            source: m.source,
-          },
-        });
-      }
-    }
+  const monthlyActuals = version.lines.length
+    ? await prisma.budgetLineMonthlyActual.findMany({
+        where: { budgetLineId: { in: version.lines.map((l) => l.id) } },
+      })
+    : [];
+  const monthlyByLine = new Map<string, typeof monthlyActuals>();
+  for (const m of monthlyActuals) {
+    const list = monthlyByLine.get(m.budgetLineId);
+    if (list) list.push(m);
+    else monthlyByLine.set(m.budgetLineId, [m]);
+  }
 
-    await tx.memoryEntry.create({
-      data: {
-        type: "MANUAL_ADJUSTMENT",
-        scopeDepartmentId: version.departmentId,
-        fiscalYear: version.fiscalYear,
-        source: `workflow:requestAdjustment:${child.id}`,
-        payload: { parentVersionId: version.id, childVersionId: child.id, reason },
-        createdById: user.id,
-        isUserDeletable: false,
-      },
-    });
-
-    await writeAuditLog(
-      {
-        actorUserId: user.id,
-        action: "BUDGET_ADJUSTMENT_REQUESTED",
-        entityType: "BudgetVersion",
-        entityId: child.id,
-        reason,
-        beforeData: { parentVersionId: version.id, parentStatus: version.status },
-        afterData: { childVersionId: child.id, status: child.status },
-      },
-      tx
-    );
-
-    return child;
+  const lineIdMap = new Map<string, string>(); // parent line id -> child line id
+  const lineRows: Prisma.BudgetLineCreateManyInput[] = version.lines.map((line) => {
+    const newId = randomUUID();
+    lineIdMap.set(line.id, newId);
+    return {
+      id: newId,
+      budgetVersionId: childId,
+      accountId: line.accountId,
+      priorPriorYearActual: line.priorPriorYearActual,
+      priorYearOriginalBudget: line.priorYearOriginalBudget,
+      currentYearProjection: line.currentYearProjection,
+      projectionIsComplete: line.projectionIsComplete,
+      nextYearTargetExcludingNew: line.nextYearTargetExcludingNew,
+      nextYearNewHireBudget: line.nextYearNewHireBudget,
+      nextYearTotal: line.nextYearTotal,
+      growthRateExcludingNew: line.growthRateExcludingNew,
+      growthRateIncludingNew: line.growthRateIncludingNew,
+      entryTypeSnapshot: line.entryTypeSnapshot,
+      formulaStatus: line.formulaStatus,
+      isLocked: line.isLocked,
+    };
   });
+
+  const monthlyRows: Prisma.BudgetLineMonthlyActualCreateManyInput[] = [];
+  for (const line of version.lines) {
+    const newLineId = lineIdMap.get(line.id)!;
+    for (const m of monthlyByLine.get(line.id) ?? []) {
+      monthlyRows.push({
+        id: randomUUID(),
+        budgetLineId: newLineId,
+        year: m.year,
+        month: m.month,
+        amount: m.amount,
+        isMissing: m.isMissing,
+        source: m.source,
+      });
+    }
+  }
+
+  const versionCreateQuery = prisma.budgetVersion.create({
+    data: {
+      id: childId,
+      departmentId: version.departmentId,
+      fiscalYear: version.fiscalYear,
+      versionNumber: nextVersionNumber,
+      status: "ADJUSTMENT_PENDING",
+      parentVersionId: version.id,
+      preparedById: user.id,
+      adjustmentReason: reason,
+    },
+  });
+  const linesCreateManyQuery = prisma.budgetLine.createMany({ data: lineRows });
+  const monthlyCreateManyQuery = prisma.budgetLineMonthlyActual.createMany({ data: monthlyRows });
+  const memoryEntryQuery = prisma.memoryEntry.create({
+    data: {
+      type: "MANUAL_ADJUSTMENT",
+      scopeDepartmentId: version.departmentId,
+      fiscalYear: version.fiscalYear,
+      source: `workflow:requestAdjustment:${childId}`,
+      payload: { parentVersionId: version.id, childVersionId: childId, reason },
+      createdById: user.id,
+      isUserDeletable: false,
+    },
+  });
+  const auditLogQuery = prisma.auditLog.create({
+    data: buildAuditLogData({
+      actorUserId: user.id,
+      action: "BUDGET_ADJUSTMENT_REQUESTED",
+      entityType: "BudgetVersion",
+      entityId: childId,
+      reason,
+      beforeData: { parentVersionId: version.id, parentStatus: version.status },
+      afterData: { childVersionId: childId, status: "ADJUSTMENT_PENDING" },
+    }),
+  });
+
+  try {
+    const [child] = await prisma.$transaction([
+      versionCreateQuery,
+      linesCreateManyQuery,
+      monthlyCreateManyQuery,
+      memoryEntryQuery,
+      auditLogQuery,
+    ]);
+    return child;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      // Race: another request created versionNumber `nextVersionNumber` for
+      // this department/fiscalYear between the read above and this write -
+      // the @@unique([departmentId, fiscalYear, versionNumber]) constraint
+      // caught it. The whole batch rolled back atomically, so nothing was
+      // left behind.
+      throw new ApiError(409, "此預算版本已被其他請求調整，請重新整理後再試");
+    }
+    throw err;
+  }
 }

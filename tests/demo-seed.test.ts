@@ -278,6 +278,95 @@ describe("seedDemoMasterData - performance/atomicity regression guard for the P2
   });
 });
 
+describe("createBudgetVersionDraft - performance/atomicity regression guard for the P2028 'Transaction already closed' failure", () => {
+  // The original implementation created the BudgetVersion and then looped
+  // over every active account, awaiting one `tx.budgetLine.create()` per
+  // account inside an interactive `prisma.$transaction(async (tx) => ...)`
+  // callback - 62 sequential round trips for the 財務管理處 demo dataset.
+  // Under real Neon serverless latency this exceeded Prisma's 5-second
+  // interactive-transaction timeout on POST /api/budgets, surfacing as
+  // `PrismaClientKnownRequestError P2028: Transaction already closed`
+  // (the same failure class already fixed for the 62-account seed in
+  // seedDemoMasterData.ts). As there, the fix is asserted here by the
+  // property that actually prevents it at any latency: a small, constant
+  // number of SQL statements, not one per account.
+  it("executes a small, constant number of SQL statements when creating a 62-line draft - not one round trip per account", async () => {
+    setEnv("preview", "true");
+    await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const bypassUser = testBypassUser();
+
+    const queries: string[] = [];
+    const listener = (e: { query: string }) => queries.push(e.query);
+    prisma.$on("query" as never, listener as never);
+
+    const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
+    expect(draft.status).toBe("DRAFT");
+
+    // Previously this was O(DEMO_ACCOUNT_COUNT): 62 accounts x 1 create each
+    // (plus the pre-check/account-list reads) - 60+ statements just for the
+    // line inserts. The rewritten version is exactly 3 write statements
+    // (version insert, lines createMany, audit log insert) plus a couple of
+    // read statements (duplicate-draft pre-check, active-account list) -
+    // independent of DEMO_ACCOUNT_COUNT.
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries.length).toBeLessThan(15);
+    expect(queries.length).toBeLessThan(DEMO_ACCOUNT_COUNT);
+
+    const lines = await prisma.budgetLine.findMany({ where: { budgetVersionId: draft.id } });
+    expect(lines).toHaveLength(DEMO_ACCOUNT_COUNT);
+  });
+
+  it("a failure partway through the batch leaves no partial BudgetVersion/BudgetLine data behind", async () => {
+    setEnv("preview", "true");
+    await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+
+    // Uses the exact mechanism createBudgetVersionDraft uses internally (a
+    // non-interactive prisma.$transaction([...]) batch): one deliberately
+    // invalid statement in the batch must roll back every other statement
+    // in the same batch, including the BudgetVersion insert that would have
+    // succeeded on its own.
+    const versionId = "deliberately-broken-version-id";
+    const versionCreate = prisma.budgetVersion.create({
+      data: {
+        id: versionId,
+        departmentId: demoDept.id,
+        fiscalYear: DEMO_FISCAL_YEAR,
+        versionNumber: 1,
+        status: "DRAFT",
+      },
+    });
+    const brokenLineInsert = prisma.$executeRaw`
+      INSERT INTO "BudgetLine" ("id", "budgetVersionId", "accountId", "priorPriorYearActual", "priorYearOriginalBudget", "entryTypeSnapshot")
+      VALUES ('broken-line', ${versionId}, 'not-a-real-account-id', 0, 0, 'NOT_A_REAL_ENUM_VALUE'::"AccountEntryType")
+    `;
+
+    await expect(prisma.$transaction([versionCreate, brokenLineInsert])).rejects.toThrow();
+
+    expect(await prisma.budgetVersion.findUnique({ where: { id: versionId } })).toBeNull();
+    expect(await prisma.budgetLine.findUnique({ where: { id: "broken-line" } })).toBeNull();
+  });
+
+  it("rejects a duplicate draft creation with a clear conflict, without creating a duplicate version or any lines", async () => {
+    setEnv("preview", "true");
+    await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const bypassUser = testBypassUser();
+
+    await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
+    await expect(createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR)).rejects.toThrow(ApiError);
+
+    expect(
+      await prisma.budgetVersion.count({ where: { departmentId: demoDept.id, fiscalYear: DEMO_FISCAL_YEAR } })
+    ).toBe(1);
+    const onlyVersion = await prisma.budgetVersion.findFirstOrThrow({
+      where: { departmentId: demoDept.id, fiscalYear: DEMO_FISCAL_YEAR },
+    });
+    expect(await prisma.budgetLine.count({ where: { budgetVersionId: onlyVersion.id } })).toBe(DEMO_ACCOUNT_COUNT);
+  });
+});
+
 describe("legacy DEMO-DEPT / DEMO-ACC-* cleanup - safe and idempotent", () => {
   it("deactivates (never deletes) pre-existing legacy DEMO rows and converges to the 62 real accounts", async () => {
     // Simulate a Preview database still holding the earlier placeholder data.
