@@ -14,7 +14,17 @@ export default async function BudgetVersionPage({ params }: { params: { id: stri
     where: { id: params.id },
     include: {
       department: true,
-      lines: { include: { account: true }, orderBy: { account: { code: "asc" } } },
+      // Account.code alone can no longer be sorted lexicographically into
+      // spreadsheet order now that it holds the plain Excel A欄 序號 (e.g.
+      // "3".."67", not the old zero-padded "FIN-003".."FIN-067") - a plain
+      // string sort would put "10" before "3". sourceSeq (numeric, set for
+      // every Excel-sourced account) restores the real 序號 order; accounts
+      // without a sourceSeq (a normal, non-Excel-imported account) fall
+      // back to sorting by code.
+      lines: {
+        include: { account: true },
+        orderBy: [{ account: { sourceSeq: { sort: "asc", nulls: "last" } } }, { account: { code: "asc" } }],
+      },
     },
   });
   if (!version) notFound();

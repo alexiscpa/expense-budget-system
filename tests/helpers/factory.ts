@@ -9,12 +9,31 @@ function uniq(prefix: string) {
   return `${prefix}${counter}`;
 }
 
-export async function createDepartment(overrides: Partial<{ code: string; name: string; class: "P" | "R" | "S" | "M" | "UNCLASSIFIED" }> = {}) {
+export async function createDepartment(
+  overrides: Partial<{
+    code: string;
+    name: string;
+    class: "P" | "R" | "S" | "M" | "UNCLASSIFIED";
+    priorYearHeadcount: number | null;
+    priorYearReferenceFiscalYear: number | null;
+  }> = {}
+) {
   return prisma.department.create({
     data: {
       code: overrides.code ?? uniq("DEPT"),
       name: overrides.name ?? "測試部門",
       class: overrides.class ?? "M",
+      // Passed through as-is: `undefined` (the default) omits the field so
+      // the column keeps its normal null default; an explicit `null` also
+      // sets SQL NULL (same outcome, spelled out); a number sets the real
+      // reference figure a test wants to seed.
+      priorYearHeadcount: overrides.priorYearHeadcount,
+      // Which fiscal year priorYearHeadcount represents - a test seeding a
+      // real reference figure that should actually be usable by
+      // createBudgetVersionDraft must also set this to fiscalYear-1 of
+      // whichever draft it creates (see schema comment); a test only
+      // exercising "no valid reference" leaves this at its null default.
+      priorYearReferenceFiscalYear: overrides.priorYearReferenceFiscalYear,
     },
   });
 }
@@ -55,6 +74,8 @@ export async function createAccount(
     commonCategory: "PERSONNEL" | "OFFICE" | "SG_AND_A" | "OTHER";
     entryType: "FORMULA" | "NOT_BUDGETED" | "DEPARTMENT_INPUT";
     formulaKey: string | null;
+    priorYearReferenceAmount: string | null;
+    priorYearReferenceFiscalYear: number | null;
   }> = {}
 ) {
   return prisma.account.create({
@@ -65,6 +86,12 @@ export async function createAccount(
       commonCategory: overrides.commonCategory ?? "OFFICE",
       entryType: overrides.entryType ?? "DEPARTMENT_INPUT",
       formulaKey: overrides.formulaKey ?? null,
+      // Both left undefined (-> null) by default, exactly like
+      // Department.priorYearHeadcount above - a test seeding a usable
+      // reference figure must set both together (the amount AND the fiscal
+      // year it represents), never just the amount alone.
+      priorYearReferenceAmount: overrides.priorYearReferenceAmount,
+      priorYearReferenceFiscalYear: overrides.priorYearReferenceFiscalYear,
     },
   });
 }

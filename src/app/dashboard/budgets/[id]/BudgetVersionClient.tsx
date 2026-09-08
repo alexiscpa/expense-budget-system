@@ -1,14 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ClientApiError } from "@/lib/client/api";
-import type { Role } from "@prisma/client";
+import { computeCategorySummary, CATEGORY_LABELS } from "@/lib/budget/categorySummary";
+import { formatTaipeiDate } from "@/lib/format/date";
+import type { Role, AccountCommonCategory } from "@prisma/client";
 
 interface LineDto {
   id: string;
   accountId: string;
-  account: { code: string; name: string; entryType: string };
+  account: {
+    code: string;
+    name: string;
+    entryType: string;
+    commonCategory: AccountCommonCategory;
+    isProvisionalCode: boolean;
+    sourceSeq: number | null;
+  };
   priorPriorYearActual: string;
   priorYearOriginalBudget: string;
   currentYearProjection: string | null;
@@ -21,6 +31,9 @@ interface LineDto {
   entryTypeSnapshot: string;
   formulaStatus: "NOT_APPLICABLE" | "CONFIGURED" | "NOT_CONFIGURED";
   isLocked: boolean;
+  justification: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface VersionDto {
@@ -33,6 +46,12 @@ interface VersionDto {
   adjustmentReason: string | null;
   department: { name: string; code: string };
   lines: LineDto[];
+  // null when this version's fiscal year has no confirmed prior-year
+  // reference (see Department.priorYearReferenceFiscalYear / createBudgetVersionDraft) -
+  // never a stale/mismatched-year figure.
+  priorYearHeadcount: number | null;
+  budgetYearHeadcount: number;
+  lastPreparedAt: string;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -45,6 +64,46 @@ const ACTION_LABEL: Record<string, string> = {
   adjustment: "申請預算調整",
 };
 
+function formatAmount(value: string): string {
+  const num = Number(value);
+  if (Number.isNaN(num)) return value;
+  return num.toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+/**
+ * Sanitizes a money `<input>`'s raw value while the user is still typing:
+ * keeps digits, at most one decimal point, a leading minus sign, and any
+ * thousands-separator commas the user typed or pasted (e.g. "1,200,000") -
+ * so typing, editing, clearing, and pasting either "1200000" or
+ * "1,200,000" all just work. Commas are stripped only at save time (see
+ * parseAmountForSave), never while the field is being edited, so the
+ * cursor never jumps mid-keystroke.
+ */
+function sanitizeAmountInput(raw: string): string {
+  return raw.replace(/[^\d.,-]/g, "");
+}
+
+/** Strips thousands-separator commas/whitespace before sending to the API - the server must always receive a plain numeric string, never "1,200,000". */
+function parseAmountForSave(raw: string): string {
+  const stripped = raw.replace(/[,\s]/g, "").trim();
+  return stripped === "" ? "0" : stripped;
+}
+
+/** Comma-formatted display value for a money `<input>` when it is not blank (an untouched/cleared line stays blank rather than showing "0"). */
+function formatAmountInputValue(value: string): string {
+  return value.trim() === "" ? "" : formatAmount(value);
+}
+
+// Sticky-column layout for the budget line table's first three columns
+// (分類／科目編號／項目) - explicit, non-overlapping widths and left
+// offsets shared by both the header and every body row so they stay
+// perfectly aligned while the table scrolls horizontally underneath them.
+const STICKY_COL = {
+  category: { width: 84, left: 0 },
+  code: { width: 84, left: 84 },
+  item: { width: 176, left: 168 },
+} as const;
+
 export function BudgetVersionClient({
   currentUser,
   version,
@@ -56,27 +115,108 @@ export function BudgetVersionClient({
 }) {
   const router = useRouter();
   const [lines, setLines] = useState(version.lines);
+  const [headcount, setHeadcount] = useState({
+    priorYearHeadcount: version.priorYearHeadcount,
+    budgetYearHeadcount: version.budgetYearHeadcount,
+  });
+  const [lastPreparedAt, setLastPreparedAt] = useState(version.lastPreparedAt);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reasonPrompt, setReasonPrompt] = useState<null | "return" | "reject" | "adjustment">(null);
   const [reasonText, setReasonText] = useState("");
+  const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
 
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
 
-  async function saveLine(line: LineDto, excludingNew: string, newHire: string) {
+  // Never hardcoded - every year label on this page is derived from this
+  // version's own fiscalYear, so preparing e.g. a 2028 budget automatically
+  // shows "2027推估"/"2028預算" without any code change (see spec §5:
+  // referenceYear = fiscalYear - 1, budgetYear = fiscalYear).
+  const referenceYear = version.fiscalYear - 1;
+  const budgetYear = version.fiscalYear;
+
+  // Always recomputed fresh from the current line amounts - never a stored
+  // subtotal - so this stays live as the user edits each budgetYear figure.
+  const summaryBudgetYear = useMemo(
+    () =>
+      computeCategorySummary(
+        lines.map((l) => ({ commonCategory: l.account.commonCategory, amount: l.nextYearTotal }))
+      ),
+    [lines]
+  );
+  // Only lines with a confirmed referenceYear reference (projectionIsComplete)
+  // contribute a real figure here - an unconfirmed line's priorYearOriginalBudget
+  // is always the 0 sentinel (see createBudgetVersionDraft), so summing it
+  // in unconditionally is safe and never fabricates a nonzero reference total.
+  const summaryReferenceYear = useMemo(
+    () =>
+      computeCategorySummary(
+        lines.map((l) => ({ commonCategory: l.account.commonCategory, amount: l.priorYearOriginalBudget }))
+      ),
+    [lines]
+  );
+
+  async function saveLine(
+    line: LineDto,
+    excludingNew: string,
+    newHire: string,
+    justification: string
+  ): Promise<LineDto | null> {
     setBusy(true);
     setError(null);
     try {
-      const result = await apiFetch<{ line: LineDto }>(`/api/budgets/${version.id}/lines/${line.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire }),
-      });
+      const result = await apiFetch<{ line: LineDto; lastPreparedAt: string }>(
+        `/api/budgets/${version.id}/lines/${line.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire, justification }),
+        }
+      );
       setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, ...result.line } : l)));
+      setLastPreparedAt(result.lastPreparedAt);
+      return result.line;
     } catch (err) {
       setError(err instanceof ClientApiError ? err.message : "更新失敗");
+      return null;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveHeadcount(budgetYearHeadcount: string): Promise<{ budgetYearHeadcount: number } | null> {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await apiFetch<{ version: { budgetYearHeadcount: number; lastPreparedAt: string } }>(
+        `/api/budgets/${version.id}/headcount`,
+        { method: "PATCH", body: JSON.stringify({ budgetYearHeadcount }) }
+      );
+      setHeadcount((prev) => ({ ...prev, budgetYearHeadcount: result.version.budgetYearHeadcount }));
+      setLastPreparedAt(result.version.lastPreparedAt);
+      return result.version;
+    } catch (err) {
+      setError(err instanceof ClientApiError ? err.message : "更新失敗");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleWithdraw() {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/budgets/${version.id}/withdraw`, { method: "POST" });
+      // Same in-place reload as every other workflow action below (never a
+      // navigation away from this page) - the server component re-renders
+      // with status now DRAFT and every field editable again.
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof ClientApiError ? err.message : "撤回失敗");
+    } finally {
+      setBusy(false);
+      setConfirmingWithdraw(false);
     }
   }
 
@@ -119,7 +259,37 @@ export function BudgetVersionClient({
       <h1 className="mb-1 text-xl font-bold">
         {version.department.name} — {version.fiscalYear} 年度預算（v{version.versionNumber}）
       </h1>
-      <p className="mb-4 text-sm text-slate-500">狀態：{version.status}</p>
+      <p className="mb-1 text-sm text-slate-500">狀態：{version.status}</p>
+      <p className="mb-4 text-sm text-slate-500">最後一次編製日期：{formatTaipeiDate(lastPreparedAt)}</p>
+
+      {version.status === "SUBMITTED" && (
+        <div className="mb-4">
+          <button
+            disabled={busy}
+            onClick={() => setConfirmingWithdraw(true)}
+            className="rounded border border-amber-400 bg-amber-50 px-4 py-2 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            撤回修改
+          </button>
+          {confirmingWithdraw && (
+            <div className="mt-3 max-w-md rounded border border-amber-300 bg-amber-50 p-4">
+              <p className="mb-3 text-sm text-amber-900">確定要撤回此預算並重新修改嗎？撤回後需再次送出申請。</p>
+              <div className="flex gap-2">
+                <button
+                  disabled={busy}
+                  onClick={handleWithdraw}
+                  className="rounded bg-amber-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+                >
+                  確認撤回
+                </button>
+                <button onClick={() => setConfirmingWithdraw(false)} className="rounded border px-3 py-1 text-sm">
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {version.returnReason && (
         <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -133,27 +303,66 @@ export function BudgetVersionClient({
       )}
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
 
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {summaryBudgetYear.rows.map((row) => (
+          <div key={row.category} className="rounded border border-slate-200 p-3">
+            <p className="text-xs text-slate-500">
+              {row.label}（{budgetYear}）
+            </p>
+            <p className="text-sm font-semibold">{formatAmount(row.total.toString())}</p>
+            <p className="text-xs text-slate-400">
+              {referenceYear}推估：
+              {formatAmount(summaryReferenceYear.rows.find((r) => r.category === row.category)?.total.toString() ?? "0")}
+            </p>
+          </div>
+        ))}
+        <div className="rounded border border-brand-600 bg-brand-50 p-3">
+          <p className="text-xs text-slate-500">
+            管理費用合計（{budgetYear}，即時計算）
+          </p>
+          <p className="text-sm font-semibold">{formatAmount(summaryBudgetYear.grandTotal.toString())}</p>
+          <p className="text-xs text-slate-400">
+            {referenceYear}推估：{formatAmount(summaryReferenceYear.grandTotal.toString())}
+          </p>
+        </div>
+      </div>
+
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1100px] border-collapse text-xs">
+        <table className="w-full min-w-[1500px] border-collapse text-xs">
           <thead className="bg-slate-100 text-left">
             <tr>
-              <th className="px-2 py-2">科目編號</th>
-              <th className="px-2 py-2">項目</th>
-              <th className="px-2 py-2">實績</th>
-              <th className="px-2 py-2">目標</th>
-              <th className="px-2 py-2">推移</th>
-              <th className="px-2 py-2">目標(不含新員)</th>
-              <th className="px-2 py-2">目標(新員)</th>
-              <th className="px-2 py-2">合計(含新員)</th>
-              <th className="px-2 py-2">不含新員成長率</th>
-              <th className="px-2 py-2">含新員成長率</th>
+              <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.category, { header: true })}>
+                分類
+              </th>
+              <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.code, { header: true })}>
+                科目編號
+              </th>
+              <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.item, { header: true, dividerRight: true })}>
+                項目
+              </th>
+              <th className="px-2 py-2">{referenceYear}年推估金額（唯讀）</th>
+              <th className="px-2 py-2">{budgetYear}年預算金額</th>
+              <th className="px-2 py-2">{budgetYear}年目標（新員）</th>
+              <th className="px-2 py-2">{budgetYear}年合計（含新員）</th>
+              <th className="px-2 py-2">增減金額</th>
+              <th className="px-2 py-2">增減率</th>
+              <th className="px-2 py-2">說明／編列依據</th>
             </tr>
           </thead>
           <tbody>
+            <HeadcountRow
+              headcount={headcount}
+              referenceYear={referenceYear}
+              budgetYear={budgetYear}
+              editable={editable}
+              busy={busy}
+              onSave={saveHeadcount}
+            />
             {lines.map((line) => (
               <LineRow
                 key={line.id}
                 line={line}
+                referenceYear={referenceYear}
                 editable={editable}
                 busy={busy}
                 canSeeSalary={canSeeSalary}
@@ -215,66 +424,226 @@ export function BudgetVersionClient({
   );
 }
 
+/** Shared sticky-cell inline style for the first three (frozen) table columns - see STICKY_COL. */
+function stickyCellStyle(
+  col: (typeof STICKY_COL)[keyof typeof STICKY_COL],
+  opts: { header?: boolean; dividerRight?: boolean; background?: string }
+): CSSProperties {
+  return {
+    position: "sticky",
+    left: col.left,
+    width: col.width,
+    minWidth: col.width,
+    maxWidth: col.width,
+    zIndex: opts.header ? 3 : 2,
+    background: opts.background ?? (opts.header ? "#f1f5f9" /* slate-100, matches thead bg */ : "#fff"),
+    boxShadow: opts.dividerRight ? "2px 0 4px -2px rgba(15, 23, 42, 0.25)" : undefined,
+  };
+}
+
+// Distinct light background for the 部門人數 row - opaque (not just a
+// Tailwind class) so the sticky frozen cells in this row paint the same
+// shade as the rest of it, instead of falling back to stickyCellStyle's
+// plain white and breaking the "one visually distinct band across the
+// full row width" effect required by spec.
+const HEADCOUNT_ROW_BACKGROUND = "#eef2ff"; // indigo-50
+
+/**
+ * Special first row of the budget line table: 部門人數 (department
+ * headcount). Deliberately NOT a BudgetLine/Account - no 分類, 科目編號,
+ * 目標(新員), 合計(含新員), 增減金額, 增減率, or 說明／編列依據 for this
+ * row (see spec), and it is never included in summaryBudgetYear/
+ * summaryReferenceYear above (those are computed only from `lines`, which
+ * never contains this row). Always rendered before the lines.map() below so
+ * it can never be reordered by account sorting.
+ */
+function HeadcountRow({
+  headcount,
+  referenceYear,
+  budgetYear,
+  editable,
+  busy,
+  onSave,
+}: {
+  headcount: { priorYearHeadcount: number | null; budgetYearHeadcount: number };
+  referenceYear: number;
+  budgetYear: number;
+  editable: boolean;
+  busy: boolean;
+  onSave: (budgetYearHeadcount: string) => Promise<{ budgetYearHeadcount: number } | null>;
+}) {
+  const [value, setValue] = useState(String(headcount.budgetYearHeadcount));
+
+  async function commit() {
+    if (value === String(headcount.budgetYearHeadcount)) return; // unchanged, nothing to save
+    const result = await onSave(value);
+    // On success, reflect the server's own echoed value; on failure, revert
+    // to the last known-good (server-confirmed) value rather than leaving
+    // whatever invalid text the user typed - per spec, unlike the money
+    // fields above which leave the raw input in place for the user to fix.
+    setValue(String(result ? result.budgetYearHeadcount : headcount.budgetYearHeadcount));
+  }
+
+  return (
+    <tr className="border-b-2 border-slate-300 font-semibold" style={{ background: HEADCOUNT_ROW_BACKGROUND }}>
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.category, { background: HEADCOUNT_ROW_BACKGROUND })} />
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.code, { background: HEADCOUNT_ROW_BACKGROUND })} />
+      <td
+        className="truncate px-2 py-1"
+        style={stickyCellStyle(STICKY_COL.item, { dividerRight: true, background: HEADCOUNT_ROW_BACKGROUND })}
+      >
+        部門人數
+      </td>
+      <td className="px-2 py-1" title={`${referenceYear}年推估人數，僅供參考，唯讀不可修改`}>
+        {headcount.priorYearHeadcount === null ? "—" : headcount.priorYearHeadcount}
+      </td>
+      <td className="px-2 py-1" title={`${budgetYear}年預算人數`}>
+        {editable ? (
+          <input
+            type="text"
+            inputMode="numeric"
+            className="w-24 rounded border border-slate-300 px-1 font-normal"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onBlur={commit}
+            disabled={busy}
+          />
+        ) : (
+          headcount.budgetYearHeadcount
+        )}
+      </td>
+      <td colSpan={5} />
+    </tr>
+  );
+}
+
 function LineRow({
   line,
+  referenceYear,
   editable,
   busy,
   canSeeSalary,
   onSave,
 }: {
   line: LineDto;
+  referenceYear: number;
   editable: boolean;
   busy: boolean;
   canSeeSalary: boolean;
-  onSave: (line: LineDto, excludingNew: string, newHire: string) => void;
+  onSave: (line: LineDto, excludingNew: string, newHire: string, justification: string) => Promise<LineDto | null>;
 }) {
-  const [excludingNew, setExcludingNew] = useState(line.nextYearTargetExcludingNew);
-  const [newHire, setNewHire] = useState(line.nextYearNewHireBudget);
+  // A line that has never been saved by the user (createdAt === updatedAt,
+  // set to the exact same instant when the draft was created - see
+  // createBudgetVersionDraft) shows blank inputs rather than the stored "0"
+  // default, so the budgetYear column never looks pre-filled. The moment the
+  // user saves anything (even an explicit 0), updatedAt moves past createdAt
+  // and the real stored value is shown from then on.
+  const isUntouched = line.createdAt === line.updatedAt;
+  const [excludingNew, setExcludingNew] = useState(isUntouched ? "" : formatAmountInputValue(line.nextYearTargetExcludingNew));
+  const [newHire, setNewHire] = useState(isUntouched ? "" : formatAmountInputValue(line.nextYearNewHireBudget));
+  const [justification, setJustification] = useState(line.justification ?? "");
   const canEditThisLine = editable && !line.isLocked;
+
+  async function commit() {
+    // A blank input (untouched line, or the user cleared it) means "unset",
+    // which is saved as 0 - never sent to the API as an empty string, which
+    // would otherwise fail validation just from clicking into and back out
+    // of an empty field without typing anything. Commas/whitespace (typed
+    // or pasted, e.g. "1,200,000") are stripped here so the API always
+    // receives a plain numeric string.
+    const savedLine = await onSave(line, parseAmountForSave(excludingNew), parseAmountForSave(newHire), justification);
+    // Re-display with thousands separators immediately after a successful
+    // save, using the server's own echoed values (never the raw input) -
+    // on failure, leave exactly what the user typed so they can fix it.
+    if (savedLine) {
+      setExcludingNew(formatAmountInputValue(savedLine.nextYearTargetExcludingNew));
+      setNewHire(formatAmountInputValue(savedLine.nextYearNewHireBudget));
+    }
+  }
+
+  // Only meaningful when the reference base is actually confirmed
+  // (projectionIsComplete) - priorYearOriginalBudget is the 0 sentinel
+  // otherwise (see createBudgetVersionDraft), so a naive subtraction would
+  // silently show "增減金額" as if the base were a real, known zero.
+  const deltaAmount = line.projectionIsComplete ? Number(line.nextYearTotal) - Number(line.priorYearOriginalBudget) : null;
 
   return (
     <tr className="border-t border-slate-200">
-      <td className="px-2 py-1">{line.account.code}</td>
-      <td className="px-2 py-1">{line.account.name}</td>
-      <td className="px-2 py-1">{line.priorPriorYearActual}</td>
-      <td className="px-2 py-1">{line.priorYearOriginalBudget}</td>
-      <td className="px-2 py-1">{line.projectionIsComplete ? line.currentYearProjection : "資料不全，待確認"}</td>
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.category, {})}>
+        {CATEGORY_LABELS[line.account.commonCategory]}
+      </td>
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.code, {})}>
+        {line.account.code}
+      </td>
+      <td
+        className="truncate px-2 py-1"
+        style={stickyCellStyle(STICKY_COL.item, { dividerRight: true })}
+        title={line.account.name}
+      >
+        {line.account.name}
+      </td>
+      <td className="px-2 py-1" title={`${referenceYear}年推估金額，僅供參考，唯讀不可修改`}>
+        {line.projectionIsComplete ? formatAmount(line.priorYearOriginalBudget) : `尚無${referenceYear}年推估資料`}
+      </td>
       <td className="px-2 py-1">
         {line.formulaStatus === "NOT_CONFIGURED" ? (
           <span className="font-medium text-red-600">尚未設定</span>
         ) : canEditThisLine ? (
           <input
+            type="text"
+            inputMode="decimal"
             className="w-24 rounded border border-slate-300 px-1"
             value={excludingNew}
-            onChange={(e) => setExcludingNew(e.target.value)}
-            onBlur={() => onSave(line, excludingNew, newHire)}
+            onChange={(e) => setExcludingNew(sanitizeAmountInput(e.target.value))}
+            onBlur={commit}
             disabled={busy}
           />
         ) : line.entryTypeSnapshot === "FORMULA" && !canSeeSalary ? (
-          <span title="金額由薪資資料公式計算，明細不對外開放">{line.nextYearTargetExcludingNew}</span>
+          <span title="金額由薪資資料公式計算，明細不對外開放">{formatAmount(line.nextYearTargetExcludingNew)}</span>
         ) : (
-          line.nextYearTargetExcludingNew
+          formatAmount(line.nextYearTargetExcludingNew)
         )}
       </td>
       <td className="px-2 py-1">
         {canEditThisLine ? (
           <input
+            type="text"
+            inputMode="decimal"
             className="w-24 rounded border border-slate-300 px-1"
             value={newHire}
-            onChange={(e) => setNewHire(e.target.value)}
-            onBlur={() => onSave(line, excludingNew, newHire)}
+            onChange={(e) => setNewHire(sanitizeAmountInput(e.target.value))}
+            onBlur={commit}
             disabled={busy}
           />
         ) : (
-          line.nextYearNewHireBudget
+          formatAmount(line.nextYearNewHireBudget)
         )}
       </td>
-      <td className="px-2 py-1 font-medium">{line.nextYearTotal}</td>
-      <td className="px-2 py-1">
-        {line.growthRateExcludingNew ? `${(Number(line.growthRateExcludingNew) * 100).toFixed(2)}%` : "-"}
+      <td className="px-2 py-1 font-medium">{formatAmount(line.nextYearTotal)}</td>
+      <td
+        className={`px-2 py-1 ${deltaAmount !== null && deltaAmount < 0 ? "text-emerald-700" : deltaAmount !== null && deltaAmount > 0 ? "text-red-700" : ""}`}
+      >
+        {deltaAmount !== null && Number.isFinite(deltaAmount) ? formatAmount(deltaAmount.toString()) : "—"}
       </td>
       <td className="px-2 py-1">
-        {line.growthRateIncludingNew ? `${(Number(line.growthRateIncludingNew) * 100).toFixed(2)}%` : "-"}
+        {/* 增減率 = 增減金額(budgetYear合計－referenceYear推估) ÷ referenceYear推估金額；
+            referenceYear推估不存在或為 0 時無法計算，growthRateIncludingNew 在後端已回傳
+            null（見 lib/money/decimal.ts#growthRate 與 createBudgetVersionDraft 的年度比對），此處顯示「—」。 */}
+        {line.growthRateIncludingNew ? `${(Number(line.growthRateIncludingNew) * 100).toFixed(2)}%` : "—"}
+      </td>
+      <td className="px-2 py-1">
+        {canEditThisLine ? (
+          <input
+            className="w-40 rounded border border-slate-300 px-1"
+            value={justification}
+            placeholder="說明／編列依據"
+            onChange={(e) => setJustification(e.target.value)}
+            onBlur={commit}
+            disabled={busy}
+          />
+        ) : (
+          line.justification || "-"
+        )}
       </td>
     </tr>
   );

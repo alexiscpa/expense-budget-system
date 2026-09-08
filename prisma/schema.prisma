@@ -195,14 +195,34 @@ model LoginAttempt {
 // ---------------------------------------------------------------------------
 
 model Department {
-  id        String    @id @default(cuid())
-  code      String    @unique
-  name      String
-  class     DeptClass
-  isActive  Boolean   @default(true)
-  notes     String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id       String    @id @default(cuid())
+  code     String    @unique
+  name     String
+  class    DeptClass
+  isActive Boolean   @default(true)
+  notes    String?
+
+  // Most recently known reference headcount for this department,
+  // independent of any specific BudgetVersion - mirrors
+  // Account.priorYearReferenceAmount (same rationale: a real, controlled
+  // figure, never fabricated per-department, left null until actually
+  // known). When set AND priorYearReferenceFiscalYear matches the fiscal
+  // year immediately before the one being drafted, a newly created
+  // BudgetVersion draft (see createBudgetVersionDraft) seeds both its
+  // priorYearHeadcount (read-only prior-year reference) and initial
+  // budgetYearHeadcount (the draft's own fiscal year, user-editable) from
+  // this value instead of leaving them at 0/null.
+  priorYearHeadcount           Int?
+  // Which fiscal year priorYearHeadcount actually represents (e.g. 2025 for
+  // a figure sourced from a "2025推移" column). A new draft for fiscal year
+  // Y only uses priorYearHeadcount as its prior-year reference when this
+  // equals exactly Y-1 - never reused across a year it doesn't match (that
+  // would silently relabel an older year's figure as if it were Y-1's).
+  // Null means "no confirmed reference year at all".
+  priorYearReferenceFiscalYear Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   userScopes     UserDepartmentScope[]
   budgetVersions BudgetVersion[]
@@ -221,8 +241,40 @@ model Account {
   entryType      AccountEntryType
   formulaKey     String?
   isActive       Boolean               @default(true)
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
+
+  // True when `code` is a stand-in identifier assigned because the source
+  // data (e.g. an imported spreadsheet) had no official chart-of-accounts
+  // code yet - never to be presented or relied on as a confirmed official
+  // account code. See sourceSeq/sourceRef for where the code came from.
+  isProvisionalCode Boolean @default(false)
+  // Unique (nullable - Postgres allows any number of NULLs in a unique
+  // index) so DEMO seed upserts can target the stable Excel A欄 序號
+  // instead of `code` itself, which is exactly the column that seed needs
+  // to be able to change in place (see seedDemoMasterData.ts) - a real,
+  // non-demo imported account simply leaves this null.
+  sourceSeq         Int?    @unique
+  sourceRef         String?
+
+  // Most recently known prior-year reference amount for this account,
+  // independent of any specific BudgetVersion. When set AND
+  // priorYearReferenceFiscalYear matches the fiscal year immediately before
+  // the one being drafted, a newly created BudgetVersion draft (see
+  // createBudgetVersionDraft) seeds its BudgetLine's read-only prior-year
+  // reference fields from this value instead of leaving them at 0/
+  // "資料不全" - still never a fabricated figure, only ever set from a
+  // real, controlled import.
+  priorYearReferenceAmount     Decimal? @db.Decimal(18, 2)
+  // Which fiscal year priorYearReferenceAmount actually represents (e.g.
+  // 2025 for a figure sourced from a "2025推移" column in a spreadsheet
+  // covering the 2026 budgeting cycle). A new draft for fiscal year Y only
+  // uses priorYearReferenceAmount as its prior-year reference when this
+  // equals exactly Y-1 - a draft for any other fiscal year must never reuse
+  // it relabeled as if it were that year's reference; see
+  // createBudgetVersionDraft. Null means "no confirmed reference year".
+  priorYearReferenceFiscalYear Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   budgetLines BudgetLine[]
 
@@ -302,6 +354,37 @@ model BudgetVersion {
 
   adjustmentReason String?
 
+  // 部門人數 (department headcount) - not an accounting line item, never an
+  // Account/BudgetLine (see docs on DEMO_ACCOUNTS in demo/constants.ts for
+  // why 序1「平均人數」is deliberately excluded from the chart of accounts)
+  // and never included in any category subtotal or the 管理費用 grand
+  // total. priorYearHeadcount is the read-only prior-year reference (fiscal
+  // year = this version's fiscalYear - 1), seeded once at draft creation
+  // from Department.priorYearHeadcount ONLY when
+  // Department.priorYearReferenceFiscalYear actually matches fiscalYear-1
+  // (see createBudgetVersionDraft) - null when no such confirmed reference
+  // exists, never a stale/mismatched-year figure relabeled as if it were
+  // fiscalYear-1's. Never editable through the regular budget-line API.
+  // budgetYearHeadcount is this version's own fiscal-year figure the
+  // preparer edits directly on this BudgetVersion (see
+  // updateBudgetYearHeadcount) while the version is in an editable state,
+  // subject to the exact same isEditable()/isLocked-style workflow gating
+  // as every other budget figure.
+  priorYearHeadcount  Int?
+  budgetYearHeadcount Int  @default(0)
+
+  // 最後一次編製日期 (last prepared date) - deliberately separate from
+  // `updatedAt`, which also moves on every workflow/state transition
+  // (submit, withdraw, review, approve, ...) and therefore cannot represent
+  // "when did the preparer last actually change a figure". Set once at
+  // draft creation, then bumped only by an actual content write that
+  // changes a stored value - the 2026 amount/新員/編列依據 fields (see
+  // updateDepartmentInputLine) or 2026 部門人數 (see
+  // updateBudgetYearHeadcount) - and only when the new value differs from
+  // what was already stored; opening the page, withdrawing a submission, or
+  // submitting/resubmitting never touches it.
+  lastPreparedAt DateTime
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -338,6 +421,11 @@ model BudgetLine {
   entryTypeSnapshot AccountEntryType
   formulaStatus     FormulaStatus    @default(NOT_APPLICABLE)
   isLocked          Boolean          @default(false) // true for NOT_BUDGETED / FORMULA lines
+
+  // 說明／編列依據 - free-text basis for the preparer's 2026 figure. Editable
+  // by the same DEPARTMENT_INPUT rules as the amount fields (see
+  // updateDepartmentInputLine); never auto-filled from any import.
+  justification String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

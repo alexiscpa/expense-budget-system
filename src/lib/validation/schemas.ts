@@ -22,6 +22,18 @@ export const createDraftSchema = z.object({
 export const updateLineSchema = z.object({
   nextYearTargetExcludingNew: z.string().regex(/^\d+(\.\d{1,2})?$/, "請輸入正確的金額格式"),
   nextYearNewHireBudget: z.string().regex(/^\d+(\.\d{1,2})?$/, "請輸入正確的金額格式"),
+  // 說明／編列依據 - optional; omit to leave unchanged, empty string to clear.
+  justification: z.string().max(2000, "說明過長").optional(),
+});
+
+export const updateHeadcountSchema = z.object({
+  // Same string-based convention as updateLineSchema above: exact,
+  // predictable validation with no JS-number coercion. The real bound
+  // (must be a plain non-negative integer, <= MAX_DEPARTMENT_HEADCOUNT) is
+  // enforced again in lib/budget/headcountService.ts#parseHeadcountInput,
+  // which is what tests that call the service function directly rely on -
+  // this schema is only the API route's first line of defense.
+  budgetYearHeadcount: z.string().regex(/^\d{1,6}$/, "部門人數須為 0 以上整數，不可包含小數點、負號、逗號或其他文字"),
 });
 
 export const reasonSchema = z.object({

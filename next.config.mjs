@@ -1,3 +1,11 @@
+const isDev = process.env.NODE_ENV !== "production";
+
+// Next.js's dev-mode client runtime (Hot Module Replacement / React
+// Refresh) evaluates code via `eval`, so `script-src` needs `unsafe-eval`
+// in development or the entire client bundle silently fails to execute
+// (every onClick/onSubmit handler falls through to native HTML form
+// submission because CSP blocks the runtime that wires them up).
+// Production builds do not use eval and must stay strict.
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -12,7 +20,7 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self' data:",
