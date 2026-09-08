@@ -1,3 +1,5 @@
+import { randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { isAuthBypassEnabled } from "@/lib/env";
 import { ApiError } from "@/lib/rbac/guard";
@@ -30,6 +32,14 @@ function assertBypassEnabled(): void {
   }
 }
 
+interface AccountUpsertRow {
+  id: string;
+  code: string;
+  name: string;
+  sourceSeq: number | null;
+  priorYearReferenceAmount: Prisma.Decimal | string | null;
+}
+
 /**
  * Creates (or confirms, if already present) the DEMO/TEST master data for
  * hand-building a test budget through the screen: the real 財務管理處
@@ -52,88 +62,123 @@ function assertBypassEnabled(): void {
  * outside Preview+AUTH_DISABLED=true. Must only ever be invoked from a
  * user-triggered API request (see app/api/demo/seed/route.ts) - never from
  * a build step, postinstall script, or module top-level code.
+ *
+ * Performance note: this used to upsert the 62 accounts one row at a time
+ * inside an interactive `prisma.$transaction(async (tx) => ...)` callback -
+ * each awaited query round-trips Node -> Neon over the network, and Neon's
+ * serverless latency pushed the ~130 sequential round trips (62 accounts x
+ * up to 2 statements each, plus the legacy-cleanup lookups) past Prisma's
+ * 5-second interactive-transaction timeout, surfacing as P2028 ("Transaction
+ * already closed"). The whole operation below is now exactly 4 statements -
+ * 2 bulk legacy-retirement UPDATEs, 1 department upsert, and 1 multi-row
+ * account UPSERT built with a single parameterized INSERT ... VALUES ...
+ * ON CONFLICT DO UPDATE - sent together as a non-interactive Prisma batch
+ * transaction (the `$transaction([...])` array form). That form has no
+ * client-side timeout to exceed in the first place (Prisma only imposes the
+ * 5s/2s default timeout/maxWait on the interactive callback form), and with
+ * only 4 real round trips even a slow Neon connection has ample headroom.
  */
 export async function seedDemoMasterData(actorUserId: string | null): Promise<DemoSeedResult> {
   assertBypassEnabled();
 
-  const { department, accounts, legacyRetired } = await prisma.$transaction(async (tx) => {
-    // --- Legacy cleanup: retire (never delete) the old placeholder data --
-    const legacyAccounts: string[] = [];
-    for (const code of LEGACY_DEMO_ACCOUNT_CODES) {
-      const existing = await tx.account.findUnique({ where: { code } });
-      if (existing && existing.isActive) {
-        await tx.account.update({
-          where: { code },
-          data: {
-            isActive: false,
-            name: `${existing.name}（已停用，已由 17203 財務管理處測試資料取代）`,
-          },
-        });
-        legacyAccounts.push(code);
-      }
-    }
-    const legacyDepartments: string[] = [];
-    const existingLegacyDept = await tx.department.findUnique({ where: { code: LEGACY_DEMO_DEPARTMENT_CODE } });
-    if (existingLegacyDept && existingLegacyDept.isActive) {
-      await tx.department.update({
-        where: { code: LEGACY_DEMO_DEPARTMENT_CODE },
-        data: {
-          isActive: false,
-          notes: `${existingLegacyDept.notes ?? ""} 已停用，已由 17203 財務管理處測試資料取代。`.trim(),
-        },
-      });
-      legacyDepartments.push(LEGACY_DEMO_DEPARTMENT_CODE);
-    }
+  const legacyAccountRetireQuery = prisma.$queryRaw<{ code: string }[]>`
+    UPDATE "Account"
+    SET "isActive" = false,
+        "name" = "name" || '（已停用，已由 17203 財務管理處測試資料取代）'
+    WHERE "code" IN (${Prisma.join(LEGACY_DEMO_ACCOUNT_CODES)}) AND "isActive" = true
+    RETURNING "code"
+  `;
 
-    // --- Real department + 62 detail accounts -----------------------------
-    const department = await tx.department.upsert({
-      where: { code: DEMO_DEPARTMENT_CODE },
-      update: { name: DEMO_DEPARTMENT_NAME, class: DEMO_DEPARTMENT_CLASS, isActive: true },
-      create: {
-        code: DEMO_DEPARTMENT_CODE,
-        name: DEMO_DEPARTMENT_NAME,
-        class: DEMO_DEPARTMENT_CLASS,
-        notes:
-          "Preview 測試環境使用的真實部門識別（財務管理處），科目明細來源見各科目 sourceRef。2026 預算金額須由使用者於畫面親自輸入，非正式送審資料。",
-      },
-    });
+  const legacyDepartmentRetireQuery = prisma.$queryRaw<{ code: string }[]>`
+    UPDATE "Department"
+    SET "isActive" = false,
+        "notes" = TRIM(COALESCE("notes", '') || ' 已停用，已由 17203 財務管理處測試資料取代。')
+    WHERE "code" = ${LEGACY_DEMO_DEPARTMENT_CODE} AND "isActive" = true
+    RETURNING "code"
+  `;
 
-    const accounts = [];
-    for (const item of DEMO_ACCOUNTS) {
-      const account = await tx.account.upsert({
-        where: { code: item.code },
-        update: {
-          name: item.name,
-          majorCategory: DEMO_DEPARTMENT_CLASS,
-          commonCategory: item.commonCategory,
-          entryType: "DEPARTMENT_INPUT",
-          formulaKey: null,
-          isActive: true,
-          isProvisionalCode: true,
-          sourceSeq: item.seq,
-          sourceRef: demoSourceRef(item.seq),
-          priorYearReferenceAmount: item.priorYearReferenceAmount,
-        },
-        create: {
-          code: item.code,
-          name: item.name,
-          majorCategory: DEMO_DEPARTMENT_CLASS,
-          commonCategory: item.commonCategory,
-          entryType: "DEPARTMENT_INPUT",
-          formulaKey: null,
-          isProvisionalCode: true,
-          sourceSeq: item.seq,
-          sourceRef: demoSourceRef(item.seq),
-          priorYearReferenceAmount: item.priorYearReferenceAmount,
-        },
-      });
-      accounts.push(account);
-    }
-
-    return { department, accounts, legacyRetired: { departments: legacyDepartments, accounts: legacyAccounts } };
+  const departmentUpsertQuery = prisma.department.upsert({
+    where: { code: DEMO_DEPARTMENT_CODE },
+    update: { name: DEMO_DEPARTMENT_NAME, class: DEMO_DEPARTMENT_CLASS, isActive: true },
+    create: {
+      code: DEMO_DEPARTMENT_CODE,
+      name: DEMO_DEPARTMENT_NAME,
+      class: DEMO_DEPARTMENT_CLASS,
+      notes:
+        "Preview 測試環境使用的真實部門識別（財務管理處），科目明細來源見各科目 sourceRef。2026 預算金額須由使用者於畫面親自輸入，非正式送審資料。",
+    },
   });
 
-  const priorYearReferenceTotal = sumDecimals(accounts.map((a) => a.priorYearReferenceAmount)).toString();
+  // One multi-row INSERT ... ON CONFLICT DO UPDATE for all 62 accounts,
+  // instead of 62 individual upserts. `id` is only used when inserting a
+  // brand-new row - on conflict the existing row's id is left untouched
+  // (it is deliberately absent from the DO UPDATE SET list below), so this
+  // stays a pure upsert-by-code exactly like the previous per-row version.
+  const accountValueRows = Prisma.join(
+    DEMO_ACCOUNTS.map(
+      (item) => Prisma.sql`(
+        ${randomUUID()}, ${item.code}, ${item.name},
+        ${DEMO_DEPARTMENT_CLASS}::"DeptClass", ${item.commonCategory}::"AccountCommonCategory",
+        'DEPARTMENT_INPUT'::"AccountEntryType", true, true,
+        ${item.seq}, ${demoSourceRef(item.seq)}, ${item.priorYearReferenceAmount}::numeric,
+        now(), now()
+      )`
+    )
+  );
+
+  const accountUpsertQuery = prisma.$queryRaw<AccountUpsertRow[]>`
+    INSERT INTO "Account" (
+      "id", "code", "name",
+      "majorCategory", "commonCategory",
+      "entryType", "isActive", "isProvisionalCode",
+      "sourceSeq", "sourceRef", "priorYearReferenceAmount",
+      "createdAt", "updatedAt"
+    )
+    VALUES ${accountValueRows}
+    ON CONFLICT ("code") DO UPDATE SET
+      "name" = EXCLUDED."name",
+      "majorCategory" = EXCLUDED."majorCategory",
+      "commonCategory" = EXCLUDED."commonCategory",
+      "entryType" = EXCLUDED."entryType",
+      "formulaKey" = NULL,
+      "isActive" = true,
+      "isProvisionalCode" = true,
+      "sourceSeq" = EXCLUDED."sourceSeq",
+      "sourceRef" = EXCLUDED."sourceRef",
+      "priorYearReferenceAmount" = EXCLUDED."priorYearReferenceAmount",
+      "updatedAt" = now()
+    RETURNING "id", "code", "name", "sourceSeq", "priorYearReferenceAmount"
+  `;
+
+  // Non-interactive ("batch") transaction: all 4 statements are sent
+  // together and committed atomically by the query engine without any
+  // Node.js round trip in between, so a partial failure (e.g. a bad row)
+  // rolls back everything - never leaving a half-seeded master data set -
+  // and there is no interactive-transaction timeout to tune or exceed.
+  const [legacyAccountRows, legacyDepartmentRows, department, accountRows] = await prisma.$transaction([
+    legacyAccountRetireQuery,
+    legacyDepartmentRetireQuery,
+    departmentUpsertQuery,
+    accountUpsertQuery,
+  ]);
+
+  if (accountRows.length !== DEMO_ACCOUNT_COUNT) {
+    // Fail loudly rather than silently returning a truncated/duplicated
+    // account list - this would indicate the constants file and this
+    // function's expectations have drifted apart, not a condition to paper
+    // over with a partial result.
+    throw new ApiError(
+      500,
+      `DEMO 主檔初始化異常：預期建立/更新 ${DEMO_ACCOUNT_COUNT} 筆科目，實際回傳 ${accountRows.length} 筆，請聯絡系統管理員`
+    );
+  }
+
+  const legacyRetired = {
+    departments: legacyDepartmentRows.map((r) => r.code),
+    accounts: legacyAccountRows.map((r) => r.code),
+  };
+
+  const priorYearReferenceTotal = sumDecimals(accountRows.map((a) => a.priorYearReferenceAmount)).toString();
 
   await writeAuditLog({
     actorUserId,
@@ -142,7 +187,7 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
     entityId: department.id,
     afterData: {
       departmentCode: department.code,
-      accountCount: accounts.length,
+      accountCount: accountRows.length,
       fiscalYear: DEMO_FISCAL_YEAR,
       priorYearReferenceTotal,
       legacyRetired,
@@ -151,11 +196,11 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
 
   return {
     department: { id: department.id, code: department.code, name: department.name },
-    accounts: accounts
+    accounts: accountRows
       .map((a) => ({ id: a.id, code: a.code, name: a.name, seq: a.sourceSeq ?? 0 }))
       .sort((a, b) => a.seq - b.seq),
     fiscalYear: DEMO_FISCAL_YEAR,
-    accountCount: accounts.length,
+    accountCount: accountRows.length,
     priorYearReferenceTotal,
     legacyRetired,
   };

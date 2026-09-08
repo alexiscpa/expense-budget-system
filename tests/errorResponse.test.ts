@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { errorResponse, ApiError } from "@/lib/rbac/guard";
 
 describe("errorResponse - malformed input surfaces a clear Traditional-Chinese message, not a generic 500", () => {
@@ -31,5 +32,37 @@ describe("errorResponse - malformed input surfaces a clear Traditional-Chinese m
     expect(body.error).toBe("系統發生錯誤，請稍後再試");
     expect(JSON.stringify(body)).not.toContain("hunter2");
     expect(JSON.stringify(body)).not.toContain(".ts:42");
+  });
+
+  it("maps a Prisma P2028 ('Transaction already closed') to a clear Traditional-Chinese, traceable-by-code message - not a generic 500", async () => {
+    const err = new Prisma.PrismaClientKnownRequestError("Transaction already closed: Could not perform operation.", {
+      code: "P2028",
+      clientVersion: "5.20.0",
+      meta: { database_url: "postgresql://demo_user:s3cr3t@ep-example.neon.tech/expense_budget?sslmode=require" },
+    });
+
+    const response = errorResponse(err);
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error).toContain("P2028");
+    expect(body.error).toContain("請稍後再試");
+    // The error code is fine to surface (it's a stable public Prisma
+    // identifier), but the connection string / credentials in `meta` must
+    // never reach the client.
+    expect(JSON.stringify(body)).not.toContain("s3cr3t");
+    expect(JSON.stringify(body)).not.toContain("neon.tech");
+  });
+
+  it("maps any other Prisma known-request error the same way, still without leaking meta", async () => {
+    const err = new Prisma.PrismaClientKnownRequestError("Unique constraint failed on the fields: (`code`)", {
+      code: "P2002",
+      clientVersion: "5.20.0",
+      meta: { target: ["code"] },
+    });
+
+    const response = errorResponse(err);
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error).toContain("P2002");
   });
 });

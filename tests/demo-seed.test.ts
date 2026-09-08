@@ -214,6 +214,70 @@ describe("seedDemoMasterData - real 財務管理處 (17203) master data, 62 deta
   });
 });
 
+describe("seedDemoMasterData - performance/atomicity regression guard for the P2028 'Transaction already closed' failure", () => {
+  // The original implementation upserted the 62 accounts one row at a time
+  // inside an interactive prisma.$transaction(async (tx) => ...) callback,
+  // each awaited call round-tripping Node -> Neon. Under real Neon
+  // serverless latency, ~130 sequential round trips (62 accounts x up to 2
+  // statements, plus the legacy-cleanup lookups) exceeded Prisma's 5-second
+  // interactive-transaction timeout and surfaced as
+  // `PrismaClientKnownRequestError P2022... P2028: Transaction already
+  // closed`. This is not something a local, low-latency test Postgres can
+  // reproduce by simply waiting for a timeout - so instead of trying to
+  // "simulate 5 seconds of latency", this test asserts the property that
+  // actually prevents the failure at any latency: the number of SQL
+  // statements executed is a small constant, not one (or two) per account.
+  it("executes a small, constant number of SQL statements - not one round trip per account - regardless of the 62-account list size", async () => {
+    setEnv("preview", "true");
+    const queries: string[] = [];
+    const listener = (e: { query: string }) => queries.push(e.query);
+    prisma.$on("query" as never, listener as never);
+    try {
+      await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    } finally {
+      // PrismaClient has no $off - the listener is harmless after this
+      // point since nothing else queries db in this test, but scope the
+      // array read to before any other work happens regardless.
+    }
+
+    // Previously this was O(DEMO_ACCOUNTS.length): 62 accounts x up to 2
+    // statements/account (a SELECT-then-INSERT/UPDATE style upsert) plus a
+    // handful of legacy-cleanup lookups - well over 100 statements. The
+    // rewritten version is exactly 2 legacy-retirement UPDATEs + 1
+    // department upsert (1-2 statements) + 1 multi-row account UPSERT = a
+    // handful of statements, independent of DEMO_ACCOUNTS.length.
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries.length).toBeLessThan(15);
+    expect(queries.length).toBeLessThan(DEMO_ACCOUNT_COUNT);
+  });
+
+  it("a failure partway through the batch leaves no partial master data behind (same all-or-nothing primitive seedDemoMasterData relies on)", async () => {
+    setEnv("preview", "true");
+    // Uses the exact mechanism seedDemoMasterData uses internally (a
+    // non-interactive prisma.$transaction([...]) batch) to prove the
+    // "失敗時不得留下不完整的主檔" guarantee: one deliberately invalid
+    // statement (bad enum value) in the batch must roll back every other
+    // statement in the same batch, not just fail on its own.
+    const deptUpsert = prisma.department.upsert({
+      where: { code: DEMO_DEPARTMENT_CODE },
+      update: { name: "財務管理處", class: "M", isActive: true },
+      create: { code: DEMO_DEPARTMENT_CODE, name: "財務管理處", class: "M" },
+    });
+    const brokenAccountInsert = prisma.$executeRaw`
+      INSERT INTO "Account" ("id", "code", "name", "majorCategory", "commonCategory", "entryType", "isActive")
+      VALUES ('deliberately-broken-row', 'FIN-BROKEN-TEST', 'x', 'NOT_A_REAL_ENUM_VALUE'::"DeptClass", 'PERSONNEL'::"AccountCommonCategory", 'DEPARTMENT_INPUT'::"AccountEntryType", true)
+    `;
+
+    await expect(prisma.$transaction([deptUpsert, brokenAccountInsert])).rejects.toThrow();
+
+    // Nothing from the failed batch was left behind - not even the
+    // statement that would have succeeded on its own (the department
+    // upsert), which is exactly the "no incomplete master data" guarantee.
+    expect(await prisma.department.findUnique({ where: { code: DEMO_DEPARTMENT_CODE } })).toBeNull();
+    expect(await prisma.account.findUnique({ where: { code: "FIN-BROKEN-TEST" } })).toBeNull();
+  });
+});
+
 describe("legacy DEMO-DEPT / DEMO-ACC-* cleanup - safe and idempotent", () => {
   it("deactivates (never deletes) pre-existing legacy DEMO rows and converges to the 62 real accounts", async () => {
     // Simulate a Preview database still holding the earlier placeholder data.

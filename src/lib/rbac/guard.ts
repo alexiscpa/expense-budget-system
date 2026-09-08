@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { Prisma } from "@prisma/client";
 import { getCurrentUser, type CurrentUser } from "@/lib/auth/session";
 import { hasCapability, canAccessDepartment } from "@/lib/rbac/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
@@ -76,6 +77,20 @@ export function errorResponse(err: unknown): NextResponse {
     // own internal error shape, only the human-readable message we wrote.
     const message = err.issues[0]?.message ?? "輸入資料格式錯誤";
     return NextResponse.json({ error: message }, { status: 422 });
+  }
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    // Log the full Prisma error (code, meta, message) server-side only for
+    // troubleshooting - never forward it to the client, which would risk
+    // leaking table/column names or (in meta) connection details. The error
+    // `code` itself (e.g. "P2028") is safe to return: it is a stable,
+    // publicly-documented Prisma identifier, not a secret, and gives
+    // whoever reports the bug something to search/grep for.
+    // eslint-disable-next-line no-console
+    console.error(`[Prisma ${err.code}]`, err.message, err.meta);
+    return NextResponse.json(
+      { error: `資料庫暫時忙碌，請稍後再試一次（錯誤代碼：${err.code}）` },
+      { status: 503 }
+    );
   }
   // Never leak stack traces / DB error text to the client in any environment.
   // eslint-disable-next-line no-console
