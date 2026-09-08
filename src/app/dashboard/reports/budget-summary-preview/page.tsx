@@ -1,9 +1,7 @@
 import { redirect, notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/prisma";
 import { isAuthBypassEnabled } from "@/lib/env";
-import { DEMO_DEPARTMENT_CODE } from "@/lib/demo/constants";
-import { PREVIEW_TARGET_FISCAL_YEAR } from "@/lib/reports/budgetSummaryPreviewData";
+import { fetchFinanceDepartmentAndVersion } from "@/lib/reports/fetchFinanceVersion";
 import { BudgetSummaryPreviewClient } from "./BudgetSummaryPreviewClient";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +20,11 @@ export const dynamic = "force-dynamic";
  * otherwise renders nothing but hand-typed representative department names
  * with "—" placeholders - no other Department/Account/BudgetVersion rows
  * are created, imported, or assumed to exist.
+ *
+ * The fetch itself (fetchFinanceDepartmentAndVersion) is shared verbatim
+ * with the Excel/PDF export API route (see
+ * lib/reports/fetchFinanceVersion.ts) - the web view and its exports can
+ * never read a different BudgetVersion from each other.
  */
 export default async function BudgetSummaryPreviewPage() {
   if (!isAuthBypassEnabled()) notFound();
@@ -29,33 +32,7 @@ export default async function BudgetSummaryPreviewPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const financeDepartment = await prisma.department.findUnique({ where: { code: DEMO_DEPARTMENT_CODE } });
+  const { financeDepartment, financeVersion } = await fetchFinanceDepartmentAndVersion();
 
-  // Deliberately scoped to fiscalYear=PREVIEW_TARGET_FISCAL_YEAR only - an
-  // existing fiscalYear=2026 (or any other year) BudgetVersion for this
-  // department must NEVER be picked up and displayed under the "2027目標"
-  // columns (see spec 五-4). If no such version exists yet, financeVersion
-  // is simply null and the client renders the "2027年度尚未編製" state.
-  const financeVersion = financeDepartment
-    ? await prisma.budgetVersion.findFirst({
-        where: { departmentId: financeDepartment.id, fiscalYear: PREVIEW_TARGET_FISCAL_YEAR },
-        orderBy: [{ versionNumber: "desc" }, { updatedAt: "desc" }],
-        include: { lines: { include: { account: true } } },
-      })
-    : null;
-
-  const serializedVersion = financeVersion
-    ? JSON.parse(
-        JSON.stringify(financeVersion, (_k, v) =>
-          typeof v === "object" && v !== null && "toFixed" in v ? v.toString() : v
-        )
-      )
-    : null;
-
-  return (
-    <BudgetSummaryPreviewClient
-      financeDepartment={financeDepartment ? { code: financeDepartment.code, name: financeDepartment.name } : null}
-      financeVersion={serializedVersion}
-    />
-  );
+  return <BudgetSummaryPreviewClient financeDepartment={financeDepartment} financeVersion={financeVersion} />;
 }

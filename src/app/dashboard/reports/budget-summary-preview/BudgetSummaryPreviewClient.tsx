@@ -2,47 +2,79 @@
 
 import { useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import type { AccountCommonCategory, BudgetStatus } from "@prisma/client";
 import { CATEGORY_LABELS, CATEGORY_ORDER } from "@/lib/budget/categorySummary";
-import { sumDecimals, growthRate } from "@/lib/money/decimal";
 import { formatAmountCell, formatCountCell, formatGrowthRateCell } from "@/lib/reports/summaryFormat";
 import {
   UNIT_BLOCKS,
   PRODUCTION_PLACEHOLDER_ROWS,
-  TARGET_YEAR_NOT_PREPARED_LABEL,
   TEMPLATE_FIGURES_DISCLAIMER,
+  type UnitBlock,
 } from "@/lib/reports/budgetSummaryPreviewData";
+import {
+  STATUS_LABEL,
+  buildFinanceAgg,
+  metricsForLines,
+  financeVersionInScope,
+  financeNotInScopeStatusLabel,
+  DATA_SCOPE_OPTIONS,
+  DEFAULT_DATA_SCOPE,
+  type BudgetDataScope,
+  type ExportTableKey,
+  type FinanceVersionDto,
+} from "@/lib/reports/summaryReportData";
 import { formatTaipeiDate } from "@/lib/format/date";
 
-interface FinanceLineDto {
-  id: string;
-  priorYearOriginalBudget: string;
-  nextYearTargetExcludingNew: string;
-  nextYearNewHireBudget: string;
-  nextYearTotal: string;
-  account: { sourceSeq: number | null; name: string; commonCategory: AccountCommonCategory };
+// ---------------------------------------------------------------------------
+// Excel/PDF export links (Stage 1B) - a plain <a download> to the export API
+// route is enough since it already answers with a real `attachment`
+// Content-Disposition; no client-side fetch/blob juggling needed.
+// ---------------------------------------------------------------------------
+
+function exportHref(tableKey: ExportTableKey, format: "xlsx" | "pdf", scope: BudgetDataScope): string {
+  const params = new URLSearchParams({ table: tableKey, format, scope });
+  return `/api/reports/budget-summary-preview/export?${params.toString()}`;
 }
 
-interface FinanceVersionDto {
-  id: string;
-  status: BudgetStatus;
-  priorYearHeadcount: number;
-  budgetYearHeadcount: number;
-  lastPreparedAt: string;
-  lines: FinanceLineDto[];
+function ExportButtons({
+  tableKey,
+  scope,
+  label,
+}: {
+  tableKey: ExportTableKey;
+  scope: BudgetDataScope;
+  label?: string;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5 text-xs">
+      {label && <span className="text-slate-500">{label}：</span>}
+      <a
+        href={exportHref(tableKey, "xlsx", scope)}
+        className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 font-medium text-emerald-700 hover:bg-emerald-100"
+      >
+        匯出Excel
+      </a>
+      <a
+        href={exportHref(tableKey, "pdf", scope)}
+        className="rounded border border-rose-300 bg-rose-50 px-2 py-1 font-medium text-rose-700 hover:bg-rose-100"
+      >
+        匯出PDF
+      </a>
+    </span>
+  );
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: "草稿",
-  SUBMITTED: "已送出",
-  UNDER_REVIEW: "財務覆核中",
-  RETURNED: "已退回",
-  APPROVED: "已核准",
-  LOCKED: "已鎖定",
-  ADJUSTMENT_PENDING: "調整編製中",
-  ADJUSTED: "已調整核定",
-  REJECTED: "已駁回",
+const UNIT_BLOCK_EXPORT_KEY: Record<UnitBlock["key"], ExportTableKey> = {
+  rd: "unit-rd",
+  sales: "unit-sales",
+  admin: "unit-admin",
+  production: "unit-production-block",
 };
+
+function currentTabExportKey(tab: TabKey): ExportTableKey {
+  if (tab === "unit") return "unit-all";
+  if (tab === "sga") return "sga";
+  return "production";
+}
 
 const TAB_LABELS = {
   unit: "單位別費用與編制",
@@ -199,23 +231,33 @@ function StickyReportTable({
   );
 }
 
-function SectionTitle({ children }: { children: ReactNode }) {
+function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
-    <h3 className="mb-2 mt-6 text-sm font-bold first:mt-0" style={{ color: COLOR.sectionTitle }}>
-      {children}
-    </h3>
+    <div className="mb-2 mt-6 flex flex-wrap items-center justify-between gap-2 first:mt-0">
+      <h3 className="text-sm font-bold" style={{ color: COLOR.sectionTitle }}>
+        {children}
+      </h3>
+      {action}
+    </div>
   );
 }
 
 export function BudgetSummaryPreviewClient({
   financeDepartment,
-  financeVersion,
+  financeVersion: rawFinanceVersion,
 }: {
   financeDepartment: { code: string; name: string } | null;
   financeVersion: FinanceVersionDto | null;
 }) {
   const [tab, setTab] = useState<TabKey>("unit");
+  const [dataScope, setDataScope] = useState<BudgetDataScope>(DEFAULT_DATA_SCOPE);
 
+  // The fiscalYear=2027 version filtered by the currently-selected 資料範圍
+  // - "in scope" figures are what's actually shown/exported; the raw
+  // version (unfiltered) is kept around only to tell "no 2027 version at
+  // all" apart from "one exists but isn't in the selected scope" (see
+  // financeNotInScopeStatusLabel below).
+  const financeVersion = useMemo(() => financeVersionInScope(rawFinanceVersion, dataScope), [rawFinanceVersion, dataScope]);
   const financeAgg = useMemo(() => buildFinanceAgg(financeVersion), [financeVersion]);
 
   return (
@@ -225,6 +267,25 @@ export function BudgetSummaryPreviewClient({
         版型預覽：目前僅財務管理處為實際測試資料，其他部門尚未匯入。
         {financeVersion && ` ${TEMPLATE_FIGURES_DISCLAIMER}`}
       </p>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3 rounded border border-slate-200 bg-slate-50 px-3 py-2">
+        <label className="text-sm text-slate-700">
+          資料範圍：
+          <select
+            value={dataScope}
+            onChange={(e) => setDataScope(e.target.value as BudgetDataScope)}
+            className="ml-1 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+          >
+            {DATA_SCOPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ExportButtons tableKey={currentTabExportKey(tab)} scope={dataScope} label="匯出目前表格" />
+        <ExportButtons tableKey="full" scope={dataScope} label="匯出全部彙總表" />
+      </div>
 
       <div className="mb-4 flex gap-2 border-b border-slate-200">
         {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
@@ -240,9 +301,19 @@ export function BudgetSummaryPreviewClient({
         ))}
       </div>
 
-      {tab === "unit" && <UnitTab financeDepartment={financeDepartment} financeVersion={financeVersion} financeAgg={financeAgg} />}
-      {tab === "sga" && <SgaTab financeVersion={financeVersion} financeAgg={financeAgg} />}
-      {tab === "production" && <ProductionTab financeAgg={financeAgg} />}
+      {tab === "unit" && (
+        <UnitTab
+          financeDepartment={financeDepartment}
+          rawFinanceVersion={rawFinanceVersion}
+          financeVersion={financeVersion}
+          financeAgg={financeAgg}
+          dataScope={dataScope}
+        />
+      )}
+      {tab === "sga" && (
+        <SgaTab rawFinanceVersion={rawFinanceVersion} financeVersion={financeVersion} financeAgg={financeAgg} dataScope={dataScope} />
+      )}
+      {tab === "production" && <ProductionTab financeAgg={financeAgg} dataScope={dataScope} />}
     </main>
   );
 }
@@ -279,15 +350,22 @@ const UNIT_HEADER_LABELS = [
 
 function UnitTab({
   financeDepartment,
+  rawFinanceVersion,
   financeVersion,
   financeAgg,
+  dataScope,
 }: {
   financeDepartment: { code: string; name: string } | null;
+  rawFinanceVersion: FinanceVersionDto | null;
   financeVersion: FinanceVersionDto | null;
   financeAgg: ReturnType<typeof buildFinanceAgg>;
+  dataScope: BudgetDataScope;
 }) {
   return (
     <div>
+      <div className="mb-4">
+        <ExportButtons tableKey="unit-all" scope={dataScope} label="四大體系全部匯出" />
+      </div>
       {UNIT_BLOCKS.map((block) => {
         const rows: TableRow[] = block.departments.map((name) => {
           const isFinanceDept = Boolean(financeDepartment && name === financeDepartment.name);
@@ -323,7 +401,7 @@ function UnitTab({
               cell("—"),
               cell("—"),
               cell("—"),
-              cell(isFinanceDept ? TARGET_YEAR_NOT_PREPARED_LABEL : "未編製", false, "left"),
+              cell(isFinanceDept ? financeNotInScopeStatusLabel(rawFinanceVersion, dataScope) : "未編製", false, "left"),
               cell("—", false, "left"),
             ],
           };
@@ -365,7 +443,9 @@ function UnitTab({
 
         return (
           <div key={block.key} className="mb-6">
-            <SectionTitle>{block.title}</SectionTitle>
+            <SectionTitle action={<ExportButtons tableKey={UNIT_BLOCK_EXPORT_KEY[block.key]} scope={dataScope} />}>
+              {block.title}
+            </SectionTitle>
             <StickyReportTable
               frozenColCount={1}
               colWidths={UNIT_COL_WIDTHS}
@@ -406,39 +486,6 @@ const ACCOUNT_HEADER_LABELS = [
   "含新員成長率",
 ];
 
-function buildFinanceAgg(financeVersion: FinanceVersionDto | null) {
-  if (!financeVersion) return null;
-  const priorTotal = sumDecimals(financeVersion.lines.map((l) => l.priorYearOriginalBudget));
-  const excludingNewTotal = sumDecimals(financeVersion.lines.map((l) => l.nextYearTargetExcludingNew));
-  const newHireTotal = sumDecimals(financeVersion.lines.map((l) => l.nextYearNewHireBudget));
-  const grandTotal = sumDecimals(financeVersion.lines.map((l) => l.nextYearTotal));
-  return {
-    priorTotal,
-    excludingNewTotal,
-    newHireTotal,
-    grandTotal,
-    delta: grandTotal.minus(priorTotal),
-    growth: growthRate(priorTotal, grandTotal),
-  };
-}
-
-function metricsForLines(lines: FinanceLineDto[]) {
-  const prior = sumDecimals(lines.map((l) => l.priorYearOriginalBudget));
-  const excludingNew = sumDecimals(lines.map((l) => l.nextYearTargetExcludingNew));
-  const newHire = sumDecimals(lines.map((l) => l.nextYearNewHireBudget));
-  const total = sumDecimals(lines.map((l) => l.nextYearTotal));
-  return {
-    prior,
-    excludingNew,
-    newHire,
-    total,
-    deltaExcl: excludingNew.minus(prior),
-    growthExcl: growthRate(prior, excludingNew),
-    deltaTotal: total.minus(prior),
-    growthTotal: growthRate(prior, total),
-  };
-}
-
 function metricsRowCells(seq: string, name: string, m: ReturnType<typeof metricsForLines>): Cell[] {
   return [
     cell(seq, false, "left"),
@@ -459,11 +506,15 @@ function metricsRowCells(seq: string, name: string, m: ReturnType<typeof metrics
 // ---------------------------------------------------------------------------
 
 function SgaTab({
+  rawFinanceVersion,
   financeVersion,
   financeAgg,
+  dataScope,
 }: {
+  rawFinanceVersion: FinanceVersionDto | null;
   financeVersion: FinanceVersionDto | null;
   financeAgg: ReturnType<typeof buildFinanceAgg>;
+  dataScope: BudgetDataScope;
 }) {
   const rows: TableRow[] = [];
 
@@ -518,11 +569,14 @@ function SgaTab({
 
   return (
     <div>
-      <p className="mb-3 text-sm text-slate-600">
-        管銷研範圍：營業單位（含海外單位）、管理單位、研發單位——<strong>排除所有生產單位</strong>。
-        目前僅包含財務管理處測試資料，尚非全公司最終管銷研合計；其他部門尚未編製時不計入合計。
-      </p>
-      <SummaryBanner sgaAgg={financeAgg} />
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-slate-600">
+          管銷研範圍：營業單位（含海外單位）、管理單位、研發單位——<strong>排除所有生產單位</strong>。
+          目前僅包含財務管理處測試資料，尚非全公司最終管銷研合計；其他部門尚未編製時不計入合計。
+        </p>
+        <ExportButtons tableKey="sga" scope={dataScope} />
+      </div>
+      <SummaryBanner sgaAgg={financeAgg} dataScope={dataScope} />
       {financeVersion ? (
         <StickyReportTable
           frozenColCount={2}
@@ -534,7 +588,8 @@ function SgaTab({
         />
       ) : (
         <p className="rounded border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-          財務管理處{TARGET_YEAR_NOT_PREPARED_LABEL}，尚無 2027 年度資料可供彙總（現有 2026 年度預算資料不會顯示於本欄）。
+          財務管理處{financeNotInScopeStatusLabel(rawFinanceVersion, dataScope)}
+          ，尚無 2027 年度資料可供彙總（現有 2026 年度預算資料不會顯示於本欄）。
         </p>
       )}
     </div>
@@ -545,7 +600,13 @@ function SgaTab({
 // Tab 3: 生產科目彙總 - no production data exists yet, every figure is "—".
 // ---------------------------------------------------------------------------
 
-function ProductionTab({ financeAgg }: { financeAgg: ReturnType<typeof buildFinanceAgg> }) {
+function ProductionTab({
+  financeAgg,
+  dataScope,
+}: {
+  financeAgg: ReturnType<typeof buildFinanceAgg>;
+  dataScope: BudgetDataScope;
+}) {
   const rows: TableRow[] = PRODUCTION_PLACEHOLDER_ROWS.map((r) => ({
     background: r.kind === "total" ? COLOR.totalBg : r.kind === "subtotal" ? COLOR.subtotalBg : undefined,
     bold: r.kind !== "detail",
@@ -565,8 +626,11 @@ function ProductionTab({ financeAgg }: { financeAgg: ReturnType<typeof buildFina
 
   return (
     <div>
-      <p className="mb-3 text-sm text-slate-600">生產費用獨立列示，不併入管銷研。</p>
-      <SummaryBanner sgaAgg={financeAgg} />
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-slate-600">生產費用獨立列示，不併入管銷研。</p>
+        <ExportButtons tableKey="production" scope={dataScope} />
+      </div>
+      <SummaryBanner sgaAgg={financeAgg} dataScope={dataScope} />
       <p className="mb-3 rounded bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700">狀態：尚未匯入生產部門資料</p>
       <StickyReportTable
         frozenColCount={2}
@@ -584,7 +648,13 @@ function ProductionTab({ financeAgg }: { financeAgg: ReturnType<typeof buildFina
 // Shared 全公司費用合計區 banner, shown above the 管銷研/生產 account tables.
 // ---------------------------------------------------------------------------
 
-function SummaryBanner({ sgaAgg }: { sgaAgg: ReturnType<typeof buildFinanceAgg> }) {
+function SummaryBanner({
+  sgaAgg,
+  dataScope,
+}: {
+  sgaAgg: ReturnType<typeof buildFinanceAgg>;
+  dataScope: BudgetDataScope;
+}) {
   const colWidths = [160, 100, 100, 100, 100, 100, 90];
   const headerGroups: HeaderGroup[] = [{ label: "全公司費用合計區", span: 7 }];
   const headerLabels = ["項目", "2026推估", "2027不含新員", "2027新員", "2027合計", "增減金額", "增減率"];
@@ -621,6 +691,10 @@ function SummaryBanner({ sgaAgg }: { sgaAgg: ReturnType<typeof buildFinanceAgg> 
 
   return (
     <div className="mb-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-slate-700">全公司費用合計</h4>
+        <ExportButtons tableKey="company" scope={dataScope} />
+      </div>
       <StickyReportTable
         frozenColCount={1}
         colWidths={colWidths}
