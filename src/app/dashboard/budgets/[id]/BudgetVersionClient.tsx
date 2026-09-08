@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ClientApiError } from "@/lib/client/api";
 import { computeCategorySummary, CATEGORY_LABELS } from "@/lib/budget/categorySummary";
+import { formatTaipeiDate } from "@/lib/format/date";
 import type { Role, AccountCommonCategory } from "@prisma/client";
 
 interface LineDto {
@@ -47,6 +48,7 @@ interface VersionDto {
   lines: LineDto[];
   priorYearHeadcount: number;
   budgetYearHeadcount: number;
+  lastPreparedAt: string;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -114,10 +116,12 @@ export function BudgetVersionClient({
     priorYearHeadcount: version.priorYearHeadcount,
     budgetYearHeadcount: version.budgetYearHeadcount,
   });
+  const [lastPreparedAt, setLastPreparedAt] = useState(version.lastPreparedAt);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reasonPrompt, setReasonPrompt] = useState<null | "return" | "reject" | "adjustment">(null);
   const [reasonText, setReasonText] = useState("");
+  const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
 
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
@@ -148,11 +152,15 @@ export function BudgetVersionClient({
     setBusy(true);
     setError(null);
     try {
-      const result = await apiFetch<{ line: LineDto }>(`/api/budgets/${version.id}/lines/${line.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire, justification }),
-      });
+      const result = await apiFetch<{ line: LineDto; lastPreparedAt: string }>(
+        `/api/budgets/${version.id}/lines/${line.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire, justification }),
+        }
+      );
       setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, ...result.line } : l)));
+      setLastPreparedAt(result.lastPreparedAt);
       return result.line;
     } catch (err) {
       setError(err instanceof ClientApiError ? err.message : "更新失敗");
@@ -166,17 +174,35 @@ export function BudgetVersionClient({
     setBusy(true);
     setError(null);
     try {
-      const result = await apiFetch<{ version: { budgetYearHeadcount: number } }>(
+      const result = await apiFetch<{ version: { budgetYearHeadcount: number; lastPreparedAt: string } }>(
         `/api/budgets/${version.id}/headcount`,
         { method: "PATCH", body: JSON.stringify({ budgetYearHeadcount }) }
       );
       setHeadcount((prev) => ({ ...prev, budgetYearHeadcount: result.version.budgetYearHeadcount }));
+      setLastPreparedAt(result.version.lastPreparedAt);
       return result.version;
     } catch (err) {
       setError(err instanceof ClientApiError ? err.message : "更新失敗");
       return null;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleWithdraw() {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/budgets/${version.id}/withdraw`, { method: "POST" });
+      // Same in-place reload as every other workflow action below (never a
+      // navigation away from this page) - the server component re-renders
+      // with status now DRAFT and every field editable again.
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof ClientApiError ? err.message : "撤回失敗");
+    } finally {
+      setBusy(false);
+      setConfirmingWithdraw(false);
     }
   }
 
@@ -219,7 +245,37 @@ export function BudgetVersionClient({
       <h1 className="mb-1 text-xl font-bold">
         {version.department.name} — {version.fiscalYear} 年度預算（v{version.versionNumber}）
       </h1>
-      <p className="mb-4 text-sm text-slate-500">狀態：{version.status}</p>
+      <p className="mb-1 text-sm text-slate-500">狀態：{version.status}</p>
+      <p className="mb-4 text-sm text-slate-500">最後一次編製日期：{formatTaipeiDate(lastPreparedAt)}</p>
+
+      {version.status === "SUBMITTED" && (
+        <div className="mb-4">
+          <button
+            disabled={busy}
+            onClick={() => setConfirmingWithdraw(true)}
+            className="rounded border border-amber-400 bg-amber-50 px-4 py-2 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            撤回修改
+          </button>
+          {confirmingWithdraw && (
+            <div className="mt-3 max-w-md rounded border border-amber-300 bg-amber-50 p-4">
+              <p className="mb-3 text-sm text-amber-900">確定要撤回此預算並重新修改嗎？撤回後需再次送出申請。</p>
+              <div className="flex gap-2">
+                <button
+                  disabled={busy}
+                  onClick={handleWithdraw}
+                  className="rounded bg-amber-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+                >
+                  確認撤回
+                </button>
+                <button onClick={() => setConfirmingWithdraw(false)} className="rounded border px-3 py-1 text-sm">
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {version.returnReason && (
         <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">

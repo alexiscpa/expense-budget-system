@@ -63,10 +63,14 @@ export async function updateBudgetYearHeadcount(user: CurrentUser, versionId: st
     }
 
     const budgetYearHeadcount = parseHeadcountInput(budgetYearHeadcountInput);
+    // 最後一次編製日期 only moves when the value actually changes - saving
+    // the same headcount again (e.g. clicking into and back out of the
+    // field) must not bump it.
+    const hasChanged = budgetYearHeadcount !== version.budgetYearHeadcount;
 
     const updated = await tx.budgetVersion.update({
       where: { id: versionId },
-      data: { budgetYearHeadcount },
+      data: hasChanged ? { budgetYearHeadcount, lastPreparedAt: new Date() } : { budgetYearHeadcount },
     });
 
     await writeAuditLog(

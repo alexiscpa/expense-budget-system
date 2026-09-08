@@ -349,6 +349,18 @@ model BudgetVersion {
   priorYearHeadcount  Int @default(0)
   budgetYearHeadcount Int @default(0)
 
+  // 最後一次編製日期 (last prepared date) - deliberately separate from
+  // `updatedAt`, which also moves on every workflow/state transition
+  // (submit, withdraw, review, approve, ...) and therefore cannot represent
+  // "when did the preparer last actually change a figure". Set once at
+  // draft creation, then bumped only by an actual content write that
+  // changes a stored value - the 2026 amount/新員/編列依據 fields (see
+  // updateDepartmentInputLine) or 2026 部門人數 (see
+  // updateBudgetYearHeadcount) - and only when the new value differs from
+  // what was already stored; opening the page, withdrawing a submission, or
+  // submitting/resubmitting never touches it.
+  lastPreparedAt DateTime
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

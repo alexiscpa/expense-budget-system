@@ -22,7 +22,8 @@ export type WorkflowAction =
   | "resubmit"
   | "approve"
   | "reject"
-  | "requestAdjustment";
+  | "requestAdjustment"
+  | "withdraw";
 
 interface TransitionRule {
   from: BudgetStatus;
@@ -32,6 +33,16 @@ interface TransitionRule {
 
 export const TRANSITIONS: TransitionRule[] = [
   { from: "DRAFT", action: "submit", to: "SUBMITTED" },
+  // 撤回修改 (withdraw submission) - the preparer's own department pulls a
+  // SUBMITTED version back to DRAFT before review has started, so it can
+  // be edited again and re-submitted. Only defined for SUBMITTED - once
+  // review has started (UNDER_REVIEW) this rule does not match and
+  // withdrawBudgetSubmission (lib/workflow/actions.ts) surfaces the more
+  // specific "已進入審核程序" message instead of the generic transition
+  // error; every other status (RETURNED, LOCKED, ADJUSTED, REJECTED, ...)
+  // falls through to the generic InvalidTransitionError below, exactly
+  // like any other undefined transition.
+  { from: "SUBMITTED", action: "withdraw", to: "DRAFT" },
   { from: "RETURNED", action: "resubmit", to: "SUBMITTED" },
   { from: "ADJUSTMENT_PENDING", action: "submit", to: "SUBMITTED" },
   { from: "SUBMITTED", action: "startReview", to: "UNDER_REVIEW" },

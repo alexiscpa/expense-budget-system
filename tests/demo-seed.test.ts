@@ -340,6 +340,7 @@ describe("createBudgetVersionDraft - performance/atomicity regression guard for 
         fiscalYear: DEMO_FISCAL_YEAR,
         versionNumber: 1,
         status: "DRAFT",
+        lastPreparedAt: new Date(),
       },
     });
     const brokenLineInsert = prisma.$executeRaw`

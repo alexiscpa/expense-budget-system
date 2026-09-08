@@ -286,6 +286,56 @@ GitHub Actions 內建的方式另外準備測試環境變數。
 建立草稿（首列顯示 10/10）→ 2026 改為 12 →失焦儲存 →重新整理仍為 12 →分類小計/管理費用合計不變 →送出
 預算 →送出後嘗試修改被拒絕（409）且畫面/資料庫皆仍為 12。
 
+### 本次新增：撤回修改（SUBMITTED → DRAFT）＋ 最後一次編製日期
+
+**撤回修改**：`SUBMITTED` 版本新增「撤回修改」——不必等財務退回，原編製部門可自行把版本拉回 `DRAFT`
+繼續修改、再重新送出。
+
+- **狀態機**（`lib/workflow/stateMachine.ts`）：新增 `withdraw` action，僅定義
+  `{ from: "SUBMITTED", action: "withdraw", to: "DRAFT" }` 一條規則；其餘狀態（`UNDER_REVIEW`／
+  `LOCKED`／`ADJUSTED`／`REJECTED`…）一律不匹配，一如既有的其他非法轉換。
+- **`withdrawBudgetSubmission()`**（`lib/workflow/actions.ts`，新增）：權限比照 `updateDepartmentInputLine`
+  ——`budget.edit_own_department` ＋ `requireDepartmentAccess`（僅原編製部門的編製權限者可撤回，
+  `TEST_BYPASS_USER` 在 Preview 已內建此能力）；若已進入 `UNDER_REVIEW`，回傳更明確的 409：
+  「預算已進入審核程序，無法自行撤回，請由審核人員退回修改。」而非泛用的狀態轉換錯誤。只改
+  `status` 欄位，**不刪除或重建**任何 `BudgetVersion`／`BudgetLine`，金額、部門人數、編列依據、
+  `versionNumber` 全數原封不動。成功時寫入 `AuditLog`（`action: "BUDGET_SUBMISSION_WITHDRAWN"`，
+  `beforeData/afterData` 記錄狀態轉換，Demo bypass 身分沿用既有 `actorUserId=NULL` ＋ 標記規則）。
+- **API**：新增 `POST /api/budgets/[id]/withdraw`。
+- **畫面**：`SUBMITTED` 頁面在狀態列下方顯示「撤回修改」按鈕（琥珀色、與藍色「送出申請」明顯區隔），
+  點擊後顯示內嵌確認區塊（「確定要撤回此預算並重新修改嗎？撤回後需再次送出申請。」），確認後呼叫 API
+  並 `router.refresh()` 原地重新載入（不導回 Dashboard），畫面立即顯示 `DRAFT` 與可編輯輸入框。
+
+**最後一次編製日期**：新增 `BudgetVersion.lastPreparedAt`（`DateTime`，UTC 儲存），標題／狀態下方顯示
+「最後一次編製日期：YYYY.MM.DD」（`Asia/Taipei` 時區），Dashboard 版本清單同步新增「最後編製日期」欄。
+
+- 刻意不用 `updatedAt`——狀態轉換（送出、撤回、覆核、核准…）也會更新 `updatedAt`，無法代表「使用者最後
+  一次真正修改內容」的時間；`lastPreparedAt` 只在 2026 金額／目標(新員)／編列依據（`updateDepartmentInputLine`）
+  或 2026 部門人數（`updateBudgetYearHeadcount`）**實際寫入的值與原值不同**時才更新（以 `Decimal.equals()`／
+  數值比較判斷，重複送出相同值不動）；建立草稿（`createBudgetVersionDraft`）與調整申請
+  （`requestAdjustment`）建立子版本時各自設定一次；僅檢視、撤回、送出／重新送出一律不觸碰。
+  每次寫入都在同一個既有的小型互動交易內多加一句 `UPDATE`（不引入逐筆迴圈），沿用既有「固定少量 SQL、
+  避免 Neon P2028」的作法；多人同時編輯不同明細時，就是資料庫層面單純的「最後寫入者為準」，無需額外鎖定。
+- 新增共用格式化函式 `lib/format/date.ts#formatTaipeiDate()`（`Intl.DateTimeFormat` 以 `en-CA` 取得
+  `YYYY-MM-DD` 再轉點分隔），前後端（Client Component 與 Server Component）共用同一實作。
+- **Migration**（`20260908070000_budget_version_last_prepared_at`）：先新增可為 NULL 的欄位，再以
+  SQL 回填每一筆既有 `BudgetVersion`——優先取該版本「最後一筆內容修改」的 AuditLog 時間（`BUDGET_HEADCOUNT_UPDATED`
+  直接以 `entityId` 對應；`BUDGET_LINE_UPDATED` 的 `entityId` 是 `BudgetLine.id`，需先 JOIN 回其
+  `budgetVersionId`），找不到任何內容修改紀錄的版本（例如建立後從未編輯過的草稿）才 `COALESCE` 退回
+  `updatedAt`，最後才收緊為 `NOT NULL`。已於本機 dev 資料庫（含本次工作階段累積的真實測試資料）實際
+  套用並人工核對：`SUBMITTED` 版本的回填值精確落在「送出前最後一次編輯」的時間點，而非送出動作本身
+  的時間，證實此回填邏輯確實達到「非 `updatedAt`」的設計目的。
+
+**驗證結果**：新增 `tests/withdraw.test.ts`（9 項）與 `tests/lastPreparedAt.test.ts`（11 項），共 20 項，
+涵蓋合法撤回、撤回後資料完整保留、撤回後可修改並重新送出、`UNDER_REVIEW`／`DRAFT` 不可撤回、無權限者
+不可撤回、`AuditLog` 完整性、Preview bypass 完整撤回流程、新草稿設定 `lastPreparedAt`、金額/新員/說明/
+部門人數變更觸發更新、僅檢視/撤回/送出不觸發、寫入相同值不觸發、`Asia/Taipei` 格式化、以及撤回與編輯
+過程不新增/刪除/重複 `BudgetLine`；`npm run build` 成功；已在全新資料庫與已套用既有 migration 的升級
+資料庫上分別執行 `prisma migrate deploy`（皆成功，後者為 no-op 確認冪等）；實際啟動 `next dev` 並以
+Playwright 完成：開啟 `SUBMITTED` 預算 →確認顯示最後編製日期與撤回按鈕 →撤回（狀態變 `DRAFT`，欄位變
+可編輯）→修改一筆金額與部門人數 →重新整理仍保留 →最後編製日期正確更新 →再次送出（`SUBMITTED`）→送出
+後欄位恢復唯讀 →直接查詢資料庫確認 `AuditLog` 完整記錄「建立→送出→撤回→人數修改→再次送出」全流程。
+
 ## 部署文件
 
 - [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) — Vercel 環境變數、build 設定、回滾、migration 失敗處理

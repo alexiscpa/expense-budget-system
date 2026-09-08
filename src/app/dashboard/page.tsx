@@ -9,6 +9,7 @@ import { getDemoSeedStatus } from "@/lib/demo/seedDemoMasterData";
 import { DEMO_FISCAL_YEAR } from "@/lib/demo/constants";
 import { DemoSeedPanel } from "./DemoSeedPanel";
 import { CreateBudgetVersionForm } from "./CreateBudgetVersionForm";
+import { formatTaipeiDate } from "@/lib/format/date";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,7 @@ export default async function DashboardPage() {
             <th className="px-3 py-2">年度</th>
             <th className="px-3 py-2">版本</th>
             <th className="px-3 py-2">狀態</th>
+            <th className="px-3 py-2">最後編製日期</th>
             <th className="px-3 py-2" />
           </tr>
         </thead>
@@ -93,6 +95,7 @@ export default async function DashboardPage() {
               <td className="px-3 py-2">{v.fiscalYear}</td>
               <td className="px-3 py-2">v{v.versionNumber}</td>
               <td className="px-3 py-2">{STATUS_LABEL[v.status] ?? v.status}</td>
+              <td className="px-3 py-2">{formatTaipeiDate(v.lastPreparedAt)}</td>
               <td className="px-3 py-2">
                 <Link href={`/dashboard/budgets/${v.id}`} className="text-brand-600 hover:underline">
                   查看
@@ -102,7 +105,7 @@ export default async function DashboardPage() {
           ))}
           {versions.length === 0 && (
             <tr>
-              <td colSpan={5} className="px-3 py-6 text-center text-slate-400">
+              <td colSpan={6} className="px-3 py-6 text-center text-slate-400">
                 目前沒有可查看的預算版本
               </td>
             </tr>

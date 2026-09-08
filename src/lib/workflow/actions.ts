@@ -72,6 +72,61 @@ export async function submitBudgetVersion(user: CurrentUser, versionId: string) 
   });
 }
 
+/**
+ * 撤回修改 (withdraw submission): SUBMITTED -> DRAFT, so the preparer's own
+ * department can fix a figure and re-submit, without the finance reviewer
+ * having to "return" it first. Gated by budget.edit_own_department (the
+ * same capability that edits lines/headcount) + requireDepartmentAccess -
+ * "只有原編製部門及具預算編製權限者可以撤回" - never budget.submit_own_department,
+ * since this is a step backwards into editing, not a submission action.
+ * TEST_BYPASS_USER already carries this capability in Preview (see
+ * lib/rbac/guard.ts), so this is usable there without any special-casing.
+ *
+ * Once review has actually started (UNDER_REVIEW), the department can no
+ * longer pull the version back unilaterally - segregation of duties means
+ * only the reviewer can send it back (via returnBudgetVersion) at that
+ * point. That specific, more useful error is surfaced here rather than the
+ * generic InvalidTransitionError the assertTransition() call below would
+ * otherwise produce, since UNDER_REVIEW is deliberately not one of the
+ * `withdraw` rows in TRANSITIONS.
+ *
+ * Never deletes/recreates the BudgetVersion or any BudgetLine - only the
+ * `status` column changes, so every amount, 部門人數, 編列依據, and the
+ * versionNumber are left completely untouched.
+ */
+export async function withdrawBudgetSubmission(user: CurrentUser, versionId: string) {
+  await requireCapability(user, "budget.edit_own_department");
+
+  return prisma.$transaction(async (tx) => {
+    const version = await loadVersionOrThrow(tx, versionId);
+    await requireDepartmentAccess(user, version.departmentId);
+
+    if (version.status === "UNDER_REVIEW") {
+      throw new ApiError(409, "預算已進入審核程序，無法自行撤回，請由審核人員退回修改。");
+    }
+    assertTransition(version.status, "withdraw");
+
+    const updated = await tx.budgetVersion.update({
+      where: { id: versionId },
+      data: { status: "DRAFT" },
+    });
+
+    await writeAuditLog(
+      {
+        actorUserId: user.id,
+        action: "BUDGET_SUBMISSION_WITHDRAWN",
+        entityType: "BudgetVersion",
+        entityId: versionId,
+        beforeData: { status: version.status },
+        afterData: { status: updated.status },
+      },
+      tx
+    );
+
+    return updated;
+  });
+}
+
 export async function startReview(user: CurrentUser, versionId: string) {
   await requireCapability(user, "budget.finance_review");
 
@@ -383,6 +438,10 @@ export async function requestAdjustment(user: CurrentUser, versionId: string, re
       parentVersionId: version.id,
       preparedById: user.id,
       adjustmentReason: reason,
+      // A fresh 編製 cycle starts the moment this adjustment child version
+      // is materialized from its parent's content - same convention as
+      // createBudgetVersionDraft (lib/budget/lineService.ts).
+      lastPreparedAt: new Date(),
     },
   });
   const linesCreateManyQuery = prisma.budgetLine.createMany({ data: lineRows });

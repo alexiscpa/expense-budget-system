@@ -289,6 +289,7 @@ describe("requestAdjustment - performance/atomicity regression guard for the P20
         versionNumber: locked.versionNumber + 1,
         status: "ADJUSTMENT_PENDING",
         parentVersionId: locked.id,
+        lastPreparedAt: new Date(),
       },
     });
     const brokenLineInsert = prisma.$executeRaw`

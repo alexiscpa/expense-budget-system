@@ -169,6 +169,18 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
       // through the per-account line API.
       priorYearHeadcount,
       budgetYearHeadcount: priorYearHeadcount,
+      // Set explicitly to the same JS Date used for every line's
+      // createdAt/updatedAt above, rather than relying on
+      // @default(now())/@updatedAt (evaluated by Postgres at insert time,
+      // not this Node process) - otherwise lastPreparedAt below would never
+      // exactly equal createdAt, just be very close to it.
+      createdAt,
+      updatedAt: createdAt,
+      // 最後一次編製日期 starts at draft creation, the same instant as
+      // createdAt/updatedAt above - see the schema comment on
+      // BudgetVersion.lastPreparedAt for why this is never `updatedAt`
+      // going forward (only their starting value is shared).
+      lastPreparedAt: createdAt,
       // TEST_BYPASS_USER is a virtual identity never written to the User
       // table (see lib/auth/testBypass.ts), so its sentinel id must never
       // be written into this real foreign key - recorded as NULL here,
@@ -247,6 +259,15 @@ export async function updateDepartmentInputLine(
     const trimmedJustification = input.justification?.trim();
     const justification = input.justification === undefined ? undefined : trimmedJustification === "" ? null : trimmedJustification;
 
+    // 最後一次編製日期 only moves when a stored value actually changes -
+    // clicking into and back out of a field (or re-saving the same figure)
+    // must not bump it. Decimal comparison via .equals() (not string/toString
+    // equality, which could false-negative on e.g. "0" vs "0.00").
+    const hasContentChanged =
+      !excludingNew.equals(line.nextYearTargetExcludingNew) ||
+      !newHire.equals(line.nextYearNewHireBudget) ||
+      (justification !== undefined && justification !== line.justification);
+
     const updated = await tx.budgetLine.update({
       where: { id: lineId },
       data: {
@@ -258,6 +279,10 @@ export async function updateDepartmentInputLine(
         justification,
       },
     });
+
+    if (hasContentChanged) {
+      await tx.budgetVersion.update({ where: { id: versionId }, data: { lastPreparedAt: new Date() } });
+    }
 
     await writeAuditLog(
       {
