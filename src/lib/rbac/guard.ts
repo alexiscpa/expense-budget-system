@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ZodError } from "zod";
 import { getCurrentUser, type CurrentUser } from "@/lib/auth/session";
 import { hasCapability, canAccessDepartment } from "@/lib/rbac/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
@@ -66,6 +67,15 @@ export async function requireDepartmentAccess(user: CurrentUser, departmentId: s
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof ApiError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
+  }
+  if (err instanceof ZodError) {
+    // zod schemas in this codebase always carry a Traditional-Chinese
+    // message per field (see lib/validation/schemas.ts) - surface the
+    // first one directly instead of masking every malformed request behind
+    // the generic 500 below. Never includes the raw field path or zod's
+    // own internal error shape, only the human-readable message we wrote.
+    const message = err.issues[0]?.message ?? "輸入資料格式錯誤";
+    return NextResponse.json({ error: message }, { status: 422 });
   }
   // Never leak stack traces / DB error text to the client in any environment.
   // eslint-disable-next-line no-console

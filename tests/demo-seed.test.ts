@@ -305,6 +305,55 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
     expect(reloadedVersion.status).toBe("SUBMITTED");
   });
 
+  it("a freshly created line has createdAt === updatedAt (untouched signal for the UI's blank-input display), and an edit moves updatedAt forward", async () => {
+    setEnv("preview", "true");
+    await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const bypassUser = testBypassUser();
+    const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
+    const line = await prisma.budgetLine.findFirstOrThrow({ where: { budgetVersionId: draft.id } });
+
+    // BudgetVersionClient.tsx renders the 2026 amount inputs blank exactly
+    // when createdAt === updatedAt - assert the service layer actually
+    // produces that invariant, not just that it happens to look right today.
+    expect(line.createdAt.getTime()).toBe(line.updatedAt.getTime());
+
+    await updateDepartmentInputLine(bypassUser, draft.id, line.id, {
+      nextYearTargetExcludingNew: "500",
+      nextYearNewHireBudget: "0",
+    });
+    const afterEdit = await prisma.budgetLine.findUniqueOrThrow({ where: { id: line.id } });
+    expect(afterEdit.updatedAt.getTime()).toBeGreaterThan(afterEdit.createdAt.getTime());
+  });
+
+  it("a 2025 reference amount of 0 never causes a division-by-zero - growth rate is null, delta is still computed", async () => {
+    setEnv("preview", "true");
+    await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const bypassUser = testBypassUser();
+    const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
+
+    // FIN-004 業績獎金 has priorYearReferenceAmount "0" in the source spreadsheet.
+    const zeroRefAccount = await prisma.account.findUniqueOrThrow({ where: { code: "FIN-004" } });
+    const line = await prisma.budgetLine.findFirstOrThrow({
+      where: { budgetVersionId: draft.id, accountId: zeroRefAccount.id },
+    });
+    expect(line.priorYearOriginalBudget.toString()).toBe("0");
+
+    const updated = await updateDepartmentInputLine(bypassUser, draft.id, line.id, {
+      nextYearTargetExcludingNew: "10000",
+      nextYearNewHireBudget: "0",
+    });
+
+    // No exception thrown above is itself part of the assertion (a naive
+    // amount/base implementation would throw or produce Infinity/NaN here).
+    expect(updated.growthRateExcludingNew).toBeNull();
+    expect(updated.growthRateIncludingNew).toBeNull();
+    expect(updated.nextYearTotal.toString()).toBe("10000");
+    const delta = Number(updated.nextYearTotal) - Number(updated.priorYearOriginalBudget);
+    expect(delta).toBe(10000); // 增減金額 still computable even though 增減率 is undefined
+  });
+
   it("only the 2026 amount and justification are user-editable - account name/code/category never change", async () => {
     setEnv("preview", "true");
     await seedDemoMasterData(TEST_BYPASS_USER_ID);

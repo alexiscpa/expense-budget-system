@@ -67,6 +67,15 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
       },
     });
 
+    // Set explicitly (rather than relying on @default(now())/@updatedAt at
+    // the DB layer) so every freshly created line has createdAt and
+    // updatedAt equal to the exact same JS Date value, not two independent
+    // "now" evaluations (client-side vs the Postgres server) that could
+    // differ by a few milliseconds. The UI uses this exact equality to
+    // decide whether a 2026 amount field has ever been saved by a user -
+    // see BudgetVersionClient.tsx.
+    const createdAt = new Date();
+
     for (const account of accounts) {
       let formulaStatus: "NOT_APPLICABLE" | "CONFIGURED" | "NOT_CONFIGURED" = "NOT_APPLICABLE";
       let excludingNew = new Decimal(0);
@@ -115,6 +124,8 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
           entryTypeSnapshot: account.entryType,
           formulaStatus,
           isLocked,
+          createdAt,
+          updatedAt: createdAt,
         },
       });
     }

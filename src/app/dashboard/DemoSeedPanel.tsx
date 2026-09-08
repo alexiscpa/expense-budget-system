@@ -91,6 +91,7 @@ export function DemoSeedPanel({ initialStatus }: { initialStatus: SeedResult | n
           <p className="mb-1 font-medium text-slate-900">目前 DEMO 主檔狀態：</p>
           <p>
             測試部門：{result.department.code} - {result.department.name}
+            <span className="ml-1 rounded bg-amber-200 px-1 text-[10px] font-medium text-amber-900">測試資料</span>
           </p>
           <p>明細科目筆數：{result.accountCount} 筆（FIN-{String(result.accounts[0]?.seq ?? 0).padStart(3, "0")} ～ FIN-
             {String(result.accounts[result.accounts.length - 1]?.seq ?? 0).padStart(3, "0")}）</p>

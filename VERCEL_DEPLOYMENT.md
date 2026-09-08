@@ -60,6 +60,26 @@ Client 型別，**不會連線資料庫、不會執行 migration**），這是 P
   高風險操作的第二層控管。
 - 執行內容：`npm ci` → `npx prisma migrate deploy` → `npx prisma migrate status`（驗證套用結果）。
 
+### 5.1 重要：PR 若包含 Prisma schema 異動，Preview 部署前必須先手動跑 migration
+
+Vercel 的 Preview 部署（第 3 節）**只執行 `next build`，不會自動套用任何 Prisma migration**——這是第 3
+節說明的刻意設計（避免多個並行 Preview build 互搶 migration lock）。這代表：**只要某個 PR 修改了
+`prisma/schema.prisma` 並新增了對應的 migration 檔案，該 PR 的 Preview 網址在你手動觸發
+`migrate.yml`（選擇 `preview` environment）之前，會持續因為資料庫缺少新的欄位／資料表而回傳系統錯誤**，
+即使程式碼本身完全正確也一樣。
+
+**判斷方式**：檢查 PR 的 diff 是否包含 `prisma/migrations/` 下的新資料夾。若有，**在檢視該 PR 的 Preview
+部署之前**，先手動觸發一次 `migrate.yml`（GitHub → Actions → "Deploy Database Migrations" → Run workflow
+→ environment 選 `preview`），確認執行成功（`npx prisma migrate status` 顯示無 pending migration）後，
+再打開 Preview 網址測試。
+
+**已知案例**：本專案曾發生 Preview 網址上「初始化 DEMO 主檔」與「建立預算版本草稿」皆顯示系統錯誤，錯誤訊息
+為 `Prisma P2022: Account.isProvisionalCode does not exist in the current database`。經本機重現確認：這**不是
+程式碼缺陷**——`prisma migrate deploy` 在全新資料庫、以及在只套用了舊 migration 的資料庫上都能正確套用新
+migration（`20260907133937_account_provisional_and_line_justification`），問題純粹是**該 PR 對應的 Neon
+Preview 分支尚未執行過這次的 migration**。修復方式即為上述「先手動觸發 `migrate.yml` 選 `preview`」，而非
+修改任何程式碼。
+
 ## 6. 驗證 `/api/health`
 
 部署完成後：
@@ -109,6 +129,13 @@ Vercel 保留每次部署的完整歷史記錄：
    或 `--rolled-back <migration_name>` 手動標記該筆 migration 的狀態（依實際資料庫現況判斷是否已真的套用），
    此為**破壞性判斷操作**，執行前務必先以 `psql` 或 Neon Console 檢查資料庫目前的實際結構，並知會團隊。
 5. 修正後重新執行 workflow，並再次以 `npx prisma migrate status` 確認一致。
+
+**常見錯誤代碼 `P2022`（`The column ... does not exist in the current database`）**：這是 Prisma Client
+的型別／查詢已經包含某個欄位，但實際連線的資料庫尚未套用該欄位對應的 migration，通常代表 `migrate deploy`
+根本沒有針對這個環境執行過（而不是 migration 檔案本身寫錯）。優先確認：
+1. 你打開的網址是哪一個 Neon 分支（Production／Preview／哪個 PR 的 Preview）。
+2. 針對「同一個」分支執行 `npx prisma migrate status`，確認是否有 pending migration。
+3. 若有，依第 5.1 節／第 5 節手動觸發 `migrate.yml` 執行 `migrate deploy`，而非修改 schema 或程式碼。
 
 ## 9. Demo 測試環境（Preview 專用免登入模式）— P0 上線阻擋項目
 

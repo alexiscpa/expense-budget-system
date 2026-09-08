@@ -102,3 +102,14 @@ curl -s https://<domain>/api/health | jq
 - [ ] Neon 專案的連線數、儲存空間是否接近方案上限
 - [ ] `LoginAttempt` 是否有異常大量失敗（可能為暴力破解嘗試）
 - [ ] `AuditLog` 中 `ACCESS_DENIED_CROSS_DEPARTMENT` 是否有異常頻繁的紀錄（可能為越權嘗試）
+
+## 9. PR 檢查清單（每次 review／測試 Preview 部署前）
+
+- [ ] 這個 PR 是否修改了 `prisma/schema.prisma`？若是，`prisma/migrations/` 下是否有對應的新 migration
+  資料夾（而不是只改了 schema 卻忘記 `prisma migrate dev` 產生 migration）？
+- [ ] 若有新 migration：**在打開這個 PR 的 Preview 網址測試之前**，先手動觸發 `migrate.yml`（environment
+  選 `preview`），確認 `npx prisma migrate status` 顯示無 pending migration，否則會出現
+  `Prisma P2022: <欄位> does not exist in the current database` 之類的錯誤（詳見
+  `VERCEL_DEPLOYMENT.md` 第 5.1 節與第 8 節「常見錯誤代碼 P2022」）。
+- [ ] Migration 是否同時驗證過「從全新空白資料庫套用」與「從已套用舊 migration 的資料庫繼續套用」兩種情境
+  （本機可用 `prisma migrate deploy`，避免只依賴 `prisma db push`）？

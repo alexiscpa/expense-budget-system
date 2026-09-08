@@ -30,6 +30,8 @@ interface LineDto {
   formulaStatus: "NOT_APPLICABLE" | "CONFIGURED" | "NOT_CONFIGURED";
   isLocked: boolean;
   justification: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface VersionDto {
@@ -289,13 +291,24 @@ function LineRow({
   canSeeSalary: boolean;
   onSave: (line: LineDto, excludingNew: string, newHire: string, justification: string) => void;
 }) {
-  const [excludingNew, setExcludingNew] = useState(line.nextYearTargetExcludingNew);
-  const [newHire, setNewHire] = useState(line.nextYearNewHireBudget);
+  // A line that has never been saved by the user (createdAt === updatedAt,
+  // set to the exact same instant when the draft was created - see
+  // createBudgetVersionDraft) shows blank inputs rather than the stored "0"
+  // default, so the 2026 column never looks pre-filled. The moment the user
+  // saves anything (even an explicit 0), updatedAt moves past createdAt and
+  // the real stored value is shown from then on.
+  const isUntouched = line.createdAt === line.updatedAt;
+  const [excludingNew, setExcludingNew] = useState(isUntouched ? "" : line.nextYearTargetExcludingNew);
+  const [newHire, setNewHire] = useState(isUntouched ? "" : line.nextYearNewHireBudget);
   const [justification, setJustification] = useState(line.justification ?? "");
   const canEditThisLine = editable && !line.isLocked;
 
   function commit() {
-    onSave(line, excludingNew, newHire, justification);
+    // A blank input (untouched line, or the user cleared it) means "unset",
+    // which is saved as 0 - never sent to the API as an empty string, which
+    // would otherwise fail validation just from clicking into and back out
+    // of an empty field without typing anything.
+    onSave(line, excludingNew.trim() === "" ? "0" : excludingNew, newHire.trim() === "" ? "0" : newHire, justification);
   }
 
   const deltaAmount = Number(line.nextYearTotal) - Number(line.priorYearOriginalBudget);
@@ -353,7 +366,9 @@ function LineRow({
         {Number.isFinite(deltaAmount) ? formatAmount(deltaAmount.toString()) : "-"}
       </td>
       <td className="px-2 py-1">
-        {line.growthRateExcludingNew ? `${(Number(line.growthRateExcludingNew) * 100).toFixed(2)}%` : "-"}
+        {/* 增減率 = 增減金額(2026合計－2025推估) ÷ 2025推估金額；2025推估為 0 時無法計算，
+            growthRateIncludingNew 在後端已回傳 null（見 lib/money/decimal.ts#growthRate），此處顯示「－」。 */}
+        {line.growthRateIncludingNew ? `${(Number(line.growthRateIncludingNew) * 100).toFixed(2)}%` : "－"}
       </td>
       <td className="px-2 py-1">
         {canEditThisLine ? (

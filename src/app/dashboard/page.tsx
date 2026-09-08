@@ -84,7 +84,12 @@ export default async function DashboardPage() {
         <tbody>
           {versions.map((v) => (
             <tr key={v.id} className="border-t border-slate-200">
-              <td className="px-3 py-2">{v.department.name}</td>
+              <td className="px-3 py-2">
+                {v.department.code} - {v.department.name}
+                {bypassActive && (
+                  <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800">測試資料</span>
+                )}
+              </td>
               <td className="px-3 py-2">{v.fiscalYear}</td>
               <td className="px-3 py-2">v{v.versionNumber}</td>
               <td className="px-3 py-2">{STATUS_LABEL[v.status] ?? v.status}</td>
