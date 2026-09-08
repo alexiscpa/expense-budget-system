@@ -195,14 +195,25 @@ model LoginAttempt {
 // ---------------------------------------------------------------------------
 
 model Department {
-  id        String    @id @default(cuid())
-  code      String    @unique
-  name      String
-  class     DeptClass
-  isActive  Boolean   @default(true)
-  notes     String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id       String    @id @default(cuid())
+  code     String    @unique
+  name     String
+  class    DeptClass
+  isActive Boolean   @default(true)
+  notes    String?
+
+  // Most recently known reference headcount for this department,
+  // independent of any specific BudgetVersion - mirrors
+  // Account.priorYearReferenceAmount (same rationale: a real, controlled
+  // figure, never fabricated per-department, left null until actually
+  // known). When set, a newly created BudgetVersion draft (see
+  // createBudgetVersionDraft) seeds both its priorYearHeadcount (read-only
+  // 2025 reference) and initial budgetYearHeadcount (2026, user-editable)
+  // from this value instead of leaving them at 0.
+  priorYearHeadcount Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   userScopes     UserDepartmentScope[]
   budgetVersions BudgetVersion[]
@@ -323,6 +334,20 @@ model BudgetVersion {
   rejectReason    String?
 
   adjustmentReason String?
+
+  // 部門人數 (department headcount) - not an accounting line item, never an
+  // Account/BudgetLine (see docs on DEMO_ACCOUNTS in demo/constants.ts for
+  // why 序1「平均人數」is deliberately excluded from the chart of accounts)
+  // and never included in any category subtotal or the 管理費用 grand
+  // total. priorYearHeadcount is the read-only 2025 reference (seeded once
+  // at draft creation from Department.priorYearHeadcount, never editable
+  // through the regular budget-line API); budgetYearHeadcount is the 2026
+  // figure the preparer edits directly on this BudgetVersion (see
+  // updateBudgetYearHeadcount) while the version is in an editable state,
+  // subject to the exact same isEditable()/isLocked-style workflow gating
+  // as every other budget figure.
+  priorYearHeadcount  Int @default(0)
+  budgetYearHeadcount Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

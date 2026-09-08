@@ -9,12 +9,19 @@ function uniq(prefix: string) {
   return `${prefix}${counter}`;
 }
 
-export async function createDepartment(overrides: Partial<{ code: string; name: string; class: "P" | "R" | "S" | "M" | "UNCLASSIFIED" }> = {}) {
+export async function createDepartment(
+  overrides: Partial<{ code: string; name: string; class: "P" | "R" | "S" | "M" | "UNCLASSIFIED"; priorYearHeadcount: number | null }> = {}
+) {
   return prisma.department.create({
     data: {
       code: overrides.code ?? uniq("DEPT"),
       name: overrides.name ?? "測試部門",
       class: overrides.class ?? "M",
+      // Passed through as-is: `undefined` (the default) omits the field so
+      // the column keeps its normal null default; an explicit `null` also
+      // sets SQL NULL (same outcome, spelled out); a number sets the real
+      // reference figure a test wants to seed.
+      priorYearHeadcount: overrides.priorYearHeadcount,
     },
   });
 }

@@ -45,6 +45,8 @@ interface VersionDto {
   adjustmentReason: string | null;
   department: { name: string; code: string };
   lines: LineDto[];
+  priorYearHeadcount: number;
+  budgetYearHeadcount: number;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -108,6 +110,10 @@ export function BudgetVersionClient({
 }) {
   const router = useRouter();
   const [lines, setLines] = useState(version.lines);
+  const [headcount, setHeadcount] = useState({
+    priorYearHeadcount: version.priorYearHeadcount,
+    budgetYearHeadcount: version.budgetYearHeadcount,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reasonPrompt, setReasonPrompt] = useState<null | "return" | "reject" | "adjustment">(null);
@@ -148,6 +154,24 @@ export function BudgetVersionClient({
       });
       setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, ...result.line } : l)));
       return result.line;
+    } catch (err) {
+      setError(err instanceof ClientApiError ? err.message : "更新失敗");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveHeadcount(budgetYearHeadcount: string): Promise<{ budgetYearHeadcount: number } | null> {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await apiFetch<{ version: { budgetYearHeadcount: number } }>(
+        `/api/budgets/${version.id}/headcount`,
+        { method: "PATCH", body: JSON.stringify({ budgetYearHeadcount }) }
+      );
+      setHeadcount((prev) => ({ ...prev, budgetYearHeadcount: result.version.budgetYearHeadcount }));
+      return result.version;
     } catch (err) {
       setError(err instanceof ClientApiError ? err.message : "更新失敗");
       return null;
@@ -249,6 +273,7 @@ export function BudgetVersionClient({
             </tr>
           </thead>
           <tbody>
+            <HeadcountRow headcount={headcount} editable={editable} busy={busy} onSave={saveHeadcount} />
             {lines.map((line) => (
               <LineRow
                 key={line.id}
@@ -317,7 +342,7 @@ export function BudgetVersionClient({
 /** Shared sticky-cell inline style for the first three (frozen) table columns - see STICKY_COL. */
 function stickyCellStyle(
   col: (typeof STICKY_COL)[keyof typeof STICKY_COL],
-  opts: { header?: boolean; dividerRight?: boolean }
+  opts: { header?: boolean; dividerRight?: boolean; background?: string }
 ): CSSProperties {
   return {
     position: "sticky",
@@ -326,9 +351,81 @@ function stickyCellStyle(
     minWidth: col.width,
     maxWidth: col.width,
     zIndex: opts.header ? 3 : 2,
-    background: opts.header ? "#f1f5f9" /* slate-100, matches thead bg */ : "#fff",
+    background: opts.background ?? (opts.header ? "#f1f5f9" /* slate-100, matches thead bg */ : "#fff"),
     boxShadow: opts.dividerRight ? "2px 0 4px -2px rgba(15, 23, 42, 0.25)" : undefined,
   };
+}
+
+// Distinct light background for the 部門人數 row - opaque (not just a
+// Tailwind class) so the sticky frozen cells in this row paint the same
+// shade as the rest of it, instead of falling back to stickyCellStyle's
+// plain white and breaking the "one visually distinct band across the
+// full row width" effect required by spec.
+const HEADCOUNT_ROW_BACKGROUND = "#eef2ff"; // indigo-50
+
+/**
+ * Special first row of the budget line table: 部門人數 (department
+ * headcount). Deliberately NOT a BudgetLine/Account - no 分類, 科目編號,
+ * 目標(新員), 合計(含新員), 增減金額, 增減率, or 說明／編列依據 for this
+ * row (see spec), and it is never included in summary2026/summary2025Reference
+ * above (those are computed only from `lines`, which never contains this
+ * row). Always rendered before the lines.map() below so it can never be
+ * reordered by account sorting.
+ */
+function HeadcountRow({
+  headcount,
+  editable,
+  busy,
+  onSave,
+}: {
+  headcount: { priorYearHeadcount: number; budgetYearHeadcount: number };
+  editable: boolean;
+  busy: boolean;
+  onSave: (budgetYearHeadcount: string) => Promise<{ budgetYearHeadcount: number } | null>;
+}) {
+  const [value, setValue] = useState(String(headcount.budgetYearHeadcount));
+
+  async function commit() {
+    if (value === String(headcount.budgetYearHeadcount)) return; // unchanged, nothing to save
+    const result = await onSave(value);
+    // On success, reflect the server's own echoed value; on failure, revert
+    // to the last known-good (server-confirmed) value rather than leaving
+    // whatever invalid text the user typed - per spec, unlike the money
+    // fields above which leave the raw input in place for the user to fix.
+    setValue(String(result ? result.budgetYearHeadcount : headcount.budgetYearHeadcount));
+  }
+
+  return (
+    <tr className="border-b-2 border-slate-300 font-semibold" style={{ background: HEADCOUNT_ROW_BACKGROUND }}>
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.category, { background: HEADCOUNT_ROW_BACKGROUND })} />
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.code, { background: HEADCOUNT_ROW_BACKGROUND })} />
+      <td
+        className="truncate px-2 py-1"
+        style={stickyCellStyle(STICKY_COL.item, { dividerRight: true, background: HEADCOUNT_ROW_BACKGROUND })}
+      >
+        部門人數
+      </td>
+      <td className="px-2 py-1" title="2025 年參考人數，僅供參考，唯讀不可修改">
+        {headcount.priorYearHeadcount}
+      </td>
+      <td className="px-2 py-1">
+        {editable ? (
+          <input
+            type="text"
+            inputMode="numeric"
+            className="w-24 rounded border border-slate-300 px-1 font-normal"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onBlur={commit}
+            disabled={busy}
+          />
+        ) : (
+          headcount.budgetYearHeadcount
+        )}
+      </td>
+      <td colSpan={5} />
+    </tr>
+  );
 }
 
 function LineRow({

@@ -251,7 +251,44 @@ GitHub Actions 內建的方式另外準備測試環境變數。
 | `npm run build` | ✅ 成功產出 production build |
 | 實際啟動 `next dev`（`AUTH_DISABLED=true`、`VERCEL_ENV=preview`）＋ Playwright 瀏覽器驗證 | ✅ 初始化主檔（62 筆，代碼 3～67，無 `FIN-` 前綴）→ 建立/開啟預算版本 → 明細表水平捲動時左側三欄固定、無文字重疊（1366/1440/1920px）→ 輸入 `1200000` 與貼上 `7,905,511.50`，失焦後分別顯示 `1,200,000`／`7,905,511.5`，資料庫精確存為 `1200000.00`／`7905511.50` → 重新整理後仍顯示千分位、數值不變 → 負數（`-500`）仍被拒絕並顯示錯誤 → 送出審核為 `SUBMITTED` 後重新執行主檔初始化，確認該版本狀態與金額、科目名稱/代碼皆未受影響 |
 
+### 本次新增：部門人數（非會計科目）— 明細表第一列
 
+在費用科目表格最上方新增一列固定的「部門人數」，2025 年（`priorYearHeadcount`，唯讀）／2026 年
+（`budgetYearHeadcount`，可編輯）皆為 `BudgetVersion` 上的純量欄位，刻意**不是** Account／BudgetLine：
+不出現在分類、科目編號、目標(新員)、增減金額、增減率或編列依據欄位，也絕不計入任何分類小計或管理費用
+合計。
+
+- **資料模型**：`BudgetVersion.priorYearHeadcount` / `budgetYearHeadcount`（`Int`，皆 `@default(0)`，不得為
+  負數，服務層以正規表達式 `^\d{1,6}$` 驗證）；新增 `Department.priorYearHeadcount`（`Int?`，比照
+  `Account.priorYearReferenceAmount` 的既有慣例：獨立於任何特定 `BudgetVersion` 的最近已知真實參考數字，
+  從不虛構）。`seedDemoMasterData()` 將財務管理處（17203）的 `priorYearHeadcount` 設為 **10**（來源檔案
+  序1「平均人數」，先前因非科目而排除於 `DEMO_ACCOUNTS` 之外，這次終於用上）；`createBudgetVersionDraft()`
+  建立新草稿時，把該部門參考人數同時複製為 `priorYearHeadcount`（唯讀）與 `budgetYearHeadcount`
+  （初始值，之後由使用者直接編輯）。因為 `budgetYearHeadcount` 存在每一筆 `BudgetVersion` 自己的欄位上，
+  重新執行「初始化 DEMO 主檔」（只碰觸 `Department`／`Account`）**結構上就不可能**覆寫使用者已修改的人數。
+  Migration `20260908060000_department_headcount` 為既有 `BudgetVersion` 資料列回填 10（避免顯示為 0）。
+- **API**：新增 `PATCH /api/budgets/[id]/headcount`（`src/lib/budget/headcountService.ts`），只允許更新
+  `budgetYearHeadcount`——`priorYearHeadcount` 全站沒有任何寫入路徑。沿用與 `updateDepartmentInputLine`
+  完全相同的權限／部門範圍／工作流程狀態檢查（`budget.edit_own_department`、`requireDepartmentAccess`、
+  `isEditable(status)`），已送出（`SUBMITTED`）或其他非可編輯狀態一律拒絕並回傳 409。成功時寫入
+  `AuditLog`（`action: "BUDGET_HEADCOUNT_UPDATED"`，`beforeData`／`afterData` 皆含修改前後人數），Demo
+  bypass 身分沿用既有的 `actorUserId` 為 `NULL` ＋ `[TEST_BYPASS_USER]` 標記規則。
+- **畫面**（`BudgetVersionClient.tsx`）：新增 `HeadcountRow`，固定為 `<tbody>` 第一列（不受科目排序影響），
+  淡色背景（indigo-50）＋粗體與下方科目列明顯區隔；水平捲動時「部門人數」隨凍結的「項目」欄一起固定，
+  2025／2026 兩欄與其餘科目列的對應欄精確對齊。2026 欄位為 `type="text"` + `inputMode="numeric"`
+  整數輸入框（僅接受 0 以上整數，逗號／小數點／負號／文字一律視為格式錯誤，不像金額欄位那樣靜默移除逗號），
+  失焦即呼叫上述 API 自動儲存；儲存失敗時顯示明確錯誤訊息並**恢復為儲存前的原值**（與金額欄位「保留使用者
+  輸入原文供修正」的行為刻意不同，依本次需求規格）。
+
+**驗證結果**：`npm test` 新增 `tests/headcount.test.ts`（14 項，涵蓋草稿預設值、10→12 修改與 AuditLog、
+負數／小數／文字／空字串／逗號／超出上限的拒絕、`SUBMITTED` 不可修改、不建立 Account/BudgetLine、重新
+初始化 DEMO 主檔後使用者輸入不被覆寫）；`npm run build` 成功；實際啟動 `next dev` 並以 Playwright 完成
+建立草稿（首列顯示 10/10）→ 2026 改為 12 →失焦儲存 →重新整理仍為 12 →分類小計/管理費用合計不變 →送出
+預算 →送出後嘗試修改被拒絕（409）且畫面/資料庫皆仍為 12。
+
+## 部署文件
+
+- [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) — Vercel 環境變數、build 設定、回滾、migration 失敗處理
 - [`NEON_SETUP.md`](NEON_SETUP.md) — Neon 專案建立、pooled/direct 連線字串、Preview 資料庫分支
 - [`SECURITY.md`](SECURITY.md) — 已實作的資安控制、SSO/MFA 整合說明與限制
 - [`OPERATIONS.md`](OPERATIONS.md) — 管理員 bootstrap、主檔匯入流程、備份還原演練

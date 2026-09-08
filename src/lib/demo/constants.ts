@@ -51,6 +51,15 @@ export const DEMO_FISCAL_YEAR = 2026;
 export const DEMO_SOURCE_FILE_NAME = "2026年度費用預算V2--財務.xlsx";
 export const DEMO_SOURCE_SHEET_NAME = "財務";
 
+// 序1「平均人數」- the one row from the source spreadsheet excluded from
+// DEMO_ACCOUNTS below (it is a headcount, not an expense line item - see
+// that constant's comment). Used only to seed Department.priorYearHeadcount
+// for 17203 財務管理處 (see seedDemoMasterData.ts), from which every new
+// BudgetVersion draft derives its own priorYearHeadcount / initial
+// budgetYearHeadcount (see createBudgetVersionDraft) - never fabricated,
+// this is the real reference figure from 序1.
+export const DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT = 10;
+
 export function demoSourceRef(seq: number): string {
   return `${DEMO_SOURCE_FILE_NAME}｜${DEMO_SOURCE_SHEET_NAME}工作表｜序${seq}`;
 }

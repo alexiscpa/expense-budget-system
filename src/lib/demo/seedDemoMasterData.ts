@@ -9,6 +9,7 @@ import {
   DEMO_DEPARTMENT_CODE,
   DEMO_DEPARTMENT_NAME,
   DEMO_DEPARTMENT_CLASS,
+  DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT,
   DEMO_FISCAL_YEAR,
   DEMO_ACCOUNTS,
   DEMO_ACCOUNT_COUNT,
@@ -112,11 +113,17 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
 
   const departmentUpsertQuery = prisma.department.upsert({
     where: { code: DEMO_DEPARTMENT_CODE },
-    update: { name: DEMO_DEPARTMENT_NAME, class: DEMO_DEPARTMENT_CLASS, isActive: true },
+    update: {
+      name: DEMO_DEPARTMENT_NAME,
+      class: DEMO_DEPARTMENT_CLASS,
+      isActive: true,
+      priorYearHeadcount: DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT,
+    },
     create: {
       code: DEMO_DEPARTMENT_CODE,
       name: DEMO_DEPARTMENT_NAME,
       class: DEMO_DEPARTMENT_CLASS,
+      priorYearHeadcount: DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT,
       notes:
         "Preview 測試環境使用的真實部門識別（財務管理處），科目明細來源見各科目 sourceRef。2026 預算金額須由使用者於畫面親自輸入，非正式送審資料。",
     },

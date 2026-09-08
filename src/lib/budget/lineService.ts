@@ -78,6 +78,19 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
     throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
   }
 
+  // 部門人數 (department headcount) is not an accounting line item - it has
+  // no Account/BudgetLine, so it is seeded directly from the department's
+  // own reference figure (Department.priorYearHeadcount, set via
+  // seedDemoMasterData.ts for the 17203 demo department - see its schema
+  // comment), never fabricated. A department with no known reference yet
+  // simply starts both figures at 0, exactly like an account with no
+  // priorYearReferenceAmount starts its line at 0/"資料不全，待確認".
+  const department = await prisma.department.findUnique({
+    where: { id: departmentId },
+    select: { priorYearHeadcount: true },
+  });
+  const priorYearHeadcount = department?.priorYearHeadcount ?? 0;
+
   // Set explicitly (rather than relying on @default(now())/@updatedAt at
   // the DB layer) so every freshly created line has createdAt and
   // updatedAt equal to the exact same JS Date value, not two independent
@@ -149,6 +162,13 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
       fiscalYear,
       versionNumber: 1,
       status: "DRAFT",
+      // Initial 2026 headcount starts equal to the 2025 reference (exactly
+      // like every DEPARTMENT_INPUT BudgetLine's 2026 amount would start
+      // at its own prior-year reference if the source data provided one) -
+      // the user then edits it directly on this BudgetVersion, never
+      // through the per-account line API.
+      priorYearHeadcount,
+      budgetYearHeadcount: priorYearHeadcount,
       // TEST_BYPASS_USER is a virtual identity never written to the User
       // table (see lib/auth/testBypass.ts), so its sentinel id must never
       // be written into this real foreign key - recorded as NULL here,
