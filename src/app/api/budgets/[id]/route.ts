@@ -10,7 +10,13 @@ export async function GET(_request: Request, { params }: { params: { id: string 
       where: { id: params.id },
       include: {
         department: true,
-        lines: { include: { account: true }, orderBy: { account: { code: "asc" } } },
+        // See the same ordering note in dashboard/budgets/[id]/page.tsx:
+        // Account.code alone (now the plain Excel A欄 序號, not zero-padded)
+        // no longer sorts lexicographically into spreadsheet order.
+        lines: {
+          include: { account: true },
+          orderBy: [{ account: { sourceSeq: { sort: "asc", nulls: "last" } } }, { account: { code: "asc" } }],
+        },
       },
     });
     if (!version) throw new ApiError(404, "找不到此預算版本");

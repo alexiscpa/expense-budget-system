@@ -208,9 +208,50 @@ GitHub Actions 內建的方式另外準備測試環境變數。
    直接將 2026 總金額全數填入「不含新員」欄位、「新員」欄位留 0，畫面「合計」即等於單一輸入金額；若財務
    管理處日後需要拆分新進人員預算，此欄位已可直接使用。
 
-## 部署文件
+### 本次修正：凍結明細表左側三欄／金額千分位／改用 Excel 序號為正式科目編號
 
-- [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) — Vercel 環境變數、build 設定、回滾、migration 失敗處理
+延續上一版的財務管理處（17203）62 筆明細，依實際操作畫面回報修正三項：
+
+- **凍結左側三欄（分類／科目編號／項目）**：`BudgetVersionClient.tsx` 的明細表改用 `position: sticky`
+  固定這三欄的表頭與資料列（明確、互不重疊的欄寬與 `left` offset：84px／84px／176px，皆設不透明背景與
+  `z-index`），第三欄右側加上陰影分隔線，並在「項目」欄對超長科目名稱加上 `truncate` 與 `title`
+  屬性（滑鼠停留顯示完整名稱），使其不會蓋住右側金額欄。已在 1366／1440／1920 三種寬度以 Playwright
+  實際驗證（頁面版面 `max-w-6xl` 使內容區固定約 1104px，三種寬度下明細表皆需水平捲動，凍結欄行為一致）。
+- **金額千分位**：新增 `formatAmountInputValue()` / `sanitizeAmountInput()` / `parseAmountForSave()`
+  三個輔助函式；「2026預算金額」「目標(新員)」輸入框改為 `type="text"` + `inputMode="decimal"`（不再用
+  無法接受逗號的 `type="number"`），畫面顯示千分位、輸入/貼上時允許帶逗號、失焦儲存前才移除逗號與空白
+  送出標準數字字串；儲存成功後立即以伺服器回傳值重新格式化顯示。原本已用 `formatAmount()` 千分位顯示的
+  唯讀欄位（2025推估金額、合計(含新員)、增減金額、分類小計、管理費用合計）不受影響；原本遺漏的兩處唯讀
+  金額顯示（公式科目/無編輯權限時的「目標(不含新員)」「目標(新員)」）一併補上千分位。金額精度全程沿用
+  既有 `Decimal`／字串處理，未改用浮點數；後端既有的格式與負數驗證規則（`updateLineSchema` 正規表達式、
+  `isNegative()` 檢查）未被繞過或放寬。
+- **改用 Excel 來源科目編號**：移除暫用的 `FIN-<補零序號>` 代碼，`Account.code` 改為 Excel A欄「序號」
+  原值（例如序 3 → 科目編號 `3`，序 39 → `39`），`Account.isProvisionalCode` 改為 `false`；畫面移除
+  「暫用」徽章與「待正式會計科目代碼確認」提示。`seedDemoMasterData()` 的 upsert 改以新增的
+  `Account.sourceSeq`（唯一索引，migration
+  `20260908050000_account_source_seq_unique_code_migration`）為衝突鍵而非 `code` 本身——這樣才能讓
+  `code` 本身被改寫而不流失既有列（保留 `Account.id`，不刪除重建，既有 `BudgetLine`／稽核紀錄／已送出
+  的測試預算全數保留）；同一份 migration 另外以 SQL 直接把資料庫既有的 `FIN-<seq>` 列就地轉換成新代碼，
+  兩者搭配可涵蓋「migration 尚未套用就先呼叫 API」與「migration 套用時直接轉檔」兩種升級路徑。新代碼與
+  其他既有科目的 `code`（唯一鍵）衝突時，整批交易自動回滾並回傳清楚的繁體中文錯誤訊息（見
+  `tests/demo-seed.test.ts` 新增的衝突／升級情境測試）。另修正一個因移除補零而浮現的排序問題：
+  `dashboard/budgets/[id]/page.tsx`／`api/budgets/[id]/route.ts` 原本以 `account.code` 字串排序明細列，
+  新代碼不補零時字串排序會錯亂（如 "10" 排在 "3" 之前），已改為以數值型的 `sourceSeq` 為主要排序鍵。
+  62 筆明細與 2025 推估總額 22,176,065、四大分類小計均未變動。
+
+**驗證結果**（本次工作階段具備完整網路與本機 PostgreSQL 16，`npm ci` → `npx prisma generate/format/validate`
+→ `npm run lint` → `npm run typecheck` → `npm test` → `npm run build` 全數實際執行）：
+
+| 指令 | 結果 |
+|---|---|
+| `npx prisma generate` / `format` / `validate` | ✅ 通過 |
+| `npm run lint` | ✅ 0 錯誤、0 警告 |
+| `npm run typecheck` | ✅ 無型別錯誤 |
+| `npm test` | ✅ **16 個測試檔、120 個測試全數通過**（`tests/demo-seed.test.ts` 新增科目編號升級／衝突回滾情境） |
+| `npm run build` | ✅ 成功產出 production build |
+| 實際啟動 `next dev`（`AUTH_DISABLED=true`、`VERCEL_ENV=preview`）＋ Playwright 瀏覽器驗證 | ✅ 初始化主檔（62 筆，代碼 3～67，無 `FIN-` 前綴）→ 建立/開啟預算版本 → 明細表水平捲動時左側三欄固定、無文字重疊（1366/1440/1920px）→ 輸入 `1200000` 與貼上 `7,905,511.50`，失焦後分別顯示 `1,200,000`／`7,905,511.5`，資料庫精確存為 `1200000.00`／`7905511.50` → 重新整理後仍顯示千分位、數值不變 → 負數（`-500`）仍被拒絕並顯示錯誤 → 送出審核為 `SUBMITTED` 後重新執行主檔初始化，確認該版本狀態與金額、科目名稱/代碼皆未受影響 |
+
+
 - [`NEON_SETUP.md`](NEON_SETUP.md) — Neon 專案建立、pooled/direct 連線字串、Preview 資料庫分支
 - [`SECURITY.md`](SECURITY.md) — 已實作的資安控制、SSO/MFA 整合說明與限制
 - [`OPERATIONS.md`](OPERATIONS.md) — 管理員 bootstrap、主檔匯入流程、備份還原演練

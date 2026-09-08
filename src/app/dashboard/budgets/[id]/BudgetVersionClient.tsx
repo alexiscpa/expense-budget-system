@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ClientApiError } from "@/lib/client/api";
 import { computeCategorySummary, CATEGORY_LABELS } from "@/lib/budget/categorySummary";
@@ -62,6 +63,40 @@ function formatAmount(value: string): string {
   return num.toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
+/**
+ * Sanitizes a money `<input>`'s raw value while the user is still typing:
+ * keeps digits, at most one decimal point, a leading minus sign, and any
+ * thousands-separator commas the user typed or pasted (e.g. "1,200,000") -
+ * so typing, editing, clearing, and pasting either "1200000" or
+ * "1,200,000" all just work. Commas are stripped only at save time (see
+ * parseAmountForSave), never while the field is being edited, so the
+ * cursor never jumps mid-keystroke.
+ */
+function sanitizeAmountInput(raw: string): string {
+  return raw.replace(/[^\d.,-]/g, "");
+}
+
+/** Strips thousands-separator commas/whitespace before sending to the API - the server must always receive a plain numeric string, never "1,200,000". */
+function parseAmountForSave(raw: string): string {
+  const stripped = raw.replace(/[,\s]/g, "").trim();
+  return stripped === "" ? "0" : stripped;
+}
+
+/** Comma-formatted display value for a money `<input>` when it is not blank (an untouched/cleared line stays blank rather than showing "0"). */
+function formatAmountInputValue(value: string): string {
+  return value.trim() === "" ? "" : formatAmount(value);
+}
+
+// Sticky-column layout for the budget line table's first three columns
+// (分類／科目編號／項目) - explicit, non-overlapping widths and left
+// offsets shared by both the header and every body row so they stay
+// perfectly aligned while the table scrolls horizontally underneath them.
+const STICKY_COL = {
+  category: { width: 84, left: 0 },
+  code: { width: 84, left: 84 },
+  item: { width: 176, left: 168 },
+} as const;
+
 export function BudgetVersionClient({
   currentUser,
   version,
@@ -80,7 +115,6 @@ export function BudgetVersionClient({
 
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
-  const hasProvisionalCodes = lines.some((l) => l.account.isProvisionalCode);
 
   // Always recomputed fresh from the current line amounts - never a stored
   // subtotal - so this stays live as the user edits each 2026 figure.
@@ -104,7 +138,7 @@ export function BudgetVersionClient({
     excludingNew: string,
     newHire: string,
     justification: string
-  ) {
+  ): Promise<LineDto | null> {
     setBusy(true);
     setError(null);
     try {
@@ -113,8 +147,10 @@ export function BudgetVersionClient({
         body: JSON.stringify({ nextYearTargetExcludingNew: excludingNew, nextYearNewHireBudget: newHire, justification }),
       });
       setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, ...result.line } : l)));
+      return result.line;
     } catch (err) {
       setError(err instanceof ClientApiError ? err.message : "更新失敗");
+      return null;
     } finally {
       setBusy(false);
     }
@@ -171,12 +207,6 @@ export function BudgetVersionClient({
           仍有公式科目尚未設定（顯示為「尚未設定」），無法送出或核准，請聯絡財務管理員完成公式與薪資資料來源設定。
         </p>
       )}
-      {hasProvisionalCodes && (
-        <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          本頁部分科目使用「暫用測試代碼」（如 FIN-xxx），僅為來源檔案序號對應之測試用識別碼，
-          <strong>待正式會計科目代碼確認</strong>，尚非正式會計科目代碼。
-        </p>
-      )}
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -200,9 +230,15 @@ export function BudgetVersionClient({
         <table className="w-full min-w-[1500px] border-collapse text-xs">
           <thead className="bg-slate-100 text-left">
             <tr>
-              <th className="px-2 py-2">分類</th>
-              <th className="px-2 py-2">科目編號</th>
-              <th className="px-2 py-2">項目</th>
+              <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.category, { header: true })}>
+                分類
+              </th>
+              <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.code, { header: true })}>
+                科目編號
+              </th>
+              <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.item, { header: true, dividerRight: true })}>
+                項目
+              </th>
               <th className="px-2 py-2">2025推估金額（唯讀）</th>
               <th className="px-2 py-2">2026預算金額</th>
               <th className="px-2 py-2">目標(新員)</th>
@@ -278,6 +314,23 @@ export function BudgetVersionClient({
   );
 }
 
+/** Shared sticky-cell inline style for the first three (frozen) table columns - see STICKY_COL. */
+function stickyCellStyle(
+  col: (typeof STICKY_COL)[keyof typeof STICKY_COL],
+  opts: { header?: boolean; dividerRight?: boolean }
+): CSSProperties {
+  return {
+    position: "sticky",
+    left: col.left,
+    width: col.width,
+    minWidth: col.width,
+    maxWidth: col.width,
+    zIndex: opts.header ? 3 : 2,
+    background: opts.header ? "#f1f5f9" /* slate-100, matches thead bg */ : "#fff",
+    boxShadow: opts.dividerRight ? "2px 0 4px -2px rgba(15, 23, 42, 0.25)" : undefined,
+  };
+}
+
 function LineRow({
   line,
   editable,
@@ -289,7 +342,7 @@ function LineRow({
   editable: boolean;
   busy: boolean;
   canSeeSalary: boolean;
-  onSave: (line: LineDto, excludingNew: string, newHire: string, justification: string) => void;
+  onSave: (line: LineDto, excludingNew: string, newHire: string, justification: string) => Promise<LineDto | null>;
 }) {
   // A line that has never been saved by the user (createdAt === updatedAt,
   // set to the exact same instant when the draft was created - see
@@ -298,36 +351,45 @@ function LineRow({
   // saves anything (even an explicit 0), updatedAt moves past createdAt and
   // the real stored value is shown from then on.
   const isUntouched = line.createdAt === line.updatedAt;
-  const [excludingNew, setExcludingNew] = useState(isUntouched ? "" : line.nextYearTargetExcludingNew);
-  const [newHire, setNewHire] = useState(isUntouched ? "" : line.nextYearNewHireBudget);
+  const [excludingNew, setExcludingNew] = useState(isUntouched ? "" : formatAmountInputValue(line.nextYearTargetExcludingNew));
+  const [newHire, setNewHire] = useState(isUntouched ? "" : formatAmountInputValue(line.nextYearNewHireBudget));
   const [justification, setJustification] = useState(line.justification ?? "");
   const canEditThisLine = editable && !line.isLocked;
 
-  function commit() {
+  async function commit() {
     // A blank input (untouched line, or the user cleared it) means "unset",
     // which is saved as 0 - never sent to the API as an empty string, which
     // would otherwise fail validation just from clicking into and back out
-    // of an empty field without typing anything.
-    onSave(line, excludingNew.trim() === "" ? "0" : excludingNew, newHire.trim() === "" ? "0" : newHire, justification);
+    // of an empty field without typing anything. Commas/whitespace (typed
+    // or pasted, e.g. "1,200,000") are stripped here so the API always
+    // receives a plain numeric string.
+    const savedLine = await onSave(line, parseAmountForSave(excludingNew), parseAmountForSave(newHire), justification);
+    // Re-display with thousands separators immediately after a successful
+    // save, using the server's own echoed values (never the raw input) -
+    // on failure, leave exactly what the user typed so they can fix it.
+    if (savedLine) {
+      setExcludingNew(formatAmountInputValue(savedLine.nextYearTargetExcludingNew));
+      setNewHire(formatAmountInputValue(savedLine.nextYearNewHireBudget));
+    }
   }
 
   const deltaAmount = Number(line.nextYearTotal) - Number(line.priorYearOriginalBudget);
 
   return (
     <tr className="border-t border-slate-200">
-      <td className="px-2 py-1">{CATEGORY_LABELS[line.account.commonCategory]}</td>
-      <td className="px-2 py-1">
-        {line.account.code}
-        {line.account.isProvisionalCode && (
-          <span
-            className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800"
-            title="暫用測試代碼，待正式科目代碼確認"
-          >
-            暫用
-          </span>
-        )}
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.category, {})}>
+        {CATEGORY_LABELS[line.account.commonCategory]}
       </td>
-      <td className="px-2 py-1">{line.account.name}</td>
+      <td className="px-2 py-1" style={stickyCellStyle(STICKY_COL.code, {})}>
+        {line.account.code}
+      </td>
+      <td
+        className="truncate px-2 py-1"
+        style={stickyCellStyle(STICKY_COL.item, { dividerRight: true })}
+        title={line.account.name}
+      >
+        {line.account.name}
+      </td>
       <td className="px-2 py-1" title="2025 推估金額，僅供參考，唯讀不可修改">
         {line.projectionIsComplete ? formatAmount(line.priorYearOriginalBudget) : "資料不全，待確認"}
       </td>
@@ -336,29 +398,33 @@ function LineRow({
           <span className="font-medium text-red-600">尚未設定</span>
         ) : canEditThisLine ? (
           <input
+            type="text"
+            inputMode="decimal"
             className="w-24 rounded border border-slate-300 px-1"
             value={excludingNew}
-            onChange={(e) => setExcludingNew(e.target.value)}
+            onChange={(e) => setExcludingNew(sanitizeAmountInput(e.target.value))}
             onBlur={commit}
             disabled={busy}
           />
         ) : line.entryTypeSnapshot === "FORMULA" && !canSeeSalary ? (
-          <span title="金額由薪資資料公式計算，明細不對外開放">{line.nextYearTargetExcludingNew}</span>
+          <span title="金額由薪資資料公式計算，明細不對外開放">{formatAmount(line.nextYearTargetExcludingNew)}</span>
         ) : (
-          line.nextYearTargetExcludingNew
+          formatAmount(line.nextYearTargetExcludingNew)
         )}
       </td>
       <td className="px-2 py-1">
         {canEditThisLine ? (
           <input
+            type="text"
+            inputMode="decimal"
             className="w-24 rounded border border-slate-300 px-1"
             value={newHire}
-            onChange={(e) => setNewHire(e.target.value)}
+            onChange={(e) => setNewHire(sanitizeAmountInput(e.target.value))}
             onBlur={commit}
             disabled={busy}
           />
         ) : (
-          line.nextYearNewHireBudget
+          formatAmount(line.nextYearNewHireBudget)
         )}
       </td>
       <td className="px-2 py-1 font-medium">{formatAmount(line.nextYearTotal)}</td>

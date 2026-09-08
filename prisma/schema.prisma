@@ -227,7 +227,12 @@ model Account {
   // code yet - never to be presented or relied on as a confirmed official
   // account code. See sourceSeq/sourceRef for where the code came from.
   isProvisionalCode Boolean @default(false)
-  sourceSeq         Int?
+  // Unique (nullable - Postgres allows any number of NULLs in a unique
+  // index) so DEMO seed upserts can target the stable Excel A欄 序號
+  // instead of `code` itself, which is exactly the column that seed needs
+  // to be able to change in place (see seedDemoMasterData.ts) - a real,
+  // non-demo imported account simply leaves this null.
+  sourceSeq         Int?    @unique
   sourceRef         String?
 
   // Most recently known prior-year reference amount for this account,

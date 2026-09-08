@@ -3,6 +3,7 @@ import { resetDatabase } from "./helpers/reset";
 import { seedDemoMasterData, getDemoSeedStatus } from "@/lib/demo/seedDemoMasterData";
 import {
   DEMO_DEPARTMENT_CODE,
+  DEMO_DEPARTMENT_CLASS,
   DEMO_ACCOUNTS,
   DEMO_ACCOUNT_COUNT,
   DEMO_FISCAL_YEAR,
@@ -89,7 +90,7 @@ describe("seedDemoMasterData - real 財務管理處 (17203) master data, 62 deta
     expect(result.fiscalYear).toBe(2026);
 
     expect(await prisma.department.count({ where: { code: DEMO_DEPARTMENT_CODE } })).toBe(1);
-    expect(await prisma.account.count({ where: { code: { in: DEMO_ACCOUNTS.map((a) => a.code) } } })).toBe(62);
+    expect(await prisma.account.count({ where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } } })).toBe(62);
     // No duplicate codes.
     expect(new Set(result.accounts.map((a) => a.code)).size).toBe(62);
     // No budget amounts/lines are ever pre-created - those must be entered by hand.
@@ -97,15 +98,16 @@ describe("seedDemoMasterData - real 財務管理處 (17203) master data, 62 deta
     expect(await prisma.budgetLine.count()).toBe(0);
   });
 
-  it("assigns every account a provisional FIN-xxx code traceable to its original Excel 序 number", async () => {
+  it("assigns every account its real code from the source Excel A欄「序號」(no FIN- prefix, no provisional marker)", async () => {
     setEnv("preview", "true");
     await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const accounts = await prisma.account.findMany({ where: { code: { startsWith: "FIN-" } } });
+    const accounts = await prisma.account.findMany({ where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } } });
     expect(accounts).toHaveLength(62);
     for (const a of accounts) {
-      expect(a.isProvisionalCode).toBe(true);
+      expect(a.isProvisionalCode).toBe(false);
       expect(a.sourceSeq).not.toBeNull();
-      expect(a.code).toBe(`FIN-${String(a.sourceSeq).padStart(3, "0")}`);
+      expect(a.code).toBe(String(a.sourceSeq));
+      expect(a.code.startsWith("FIN-")).toBe(false);
       expect(a.sourceRef).toContain("2026年度費用預算V2--財務.xlsx");
       expect(a.sourceRef).toContain(`序${a.sourceSeq}`);
     }
@@ -114,7 +116,10 @@ describe("seedDemoMasterData - real 財務管理處 (17203) master data, 62 deta
   it("classifies every account into exactly the documented four categories, matching the given row ranges", async () => {
     setEnv("preview", "true");
     await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const accounts = await prisma.account.findMany({ where: { code: { startsWith: "FIN-" } }, orderBy: { sourceSeq: "asc" } });
+    const accounts = await prisma.account.findMany({
+      where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } },
+      orderBy: { sourceSeq: "asc" },
+    });
 
     const byCategory = { PERSONNEL: 0, SG_AND_A: 0, OFFICE: 0, OTHER: 0 } as Record<string, number>;
     for (const a of accounts) byCategory[a.commonCategory] = (byCategory[a.commonCategory] ?? 0) + 1;
@@ -149,7 +154,7 @@ describe("seedDemoMasterData - real 財務管理處 (17203) master data, 62 deta
   it("2025 reference amounts match the source spreadsheet exactly, per account and per category", async () => {
     setEnv("preview", "true");
     await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const accounts = await prisma.account.findMany({ where: { code: { startsWith: "FIN-" } } });
+    const accounts = await prisma.account.findMany({ where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } } });
 
     // Spot-check a few individual figures against the spreadsheet.
     const byName = new Map(accounts.map((a) => [a.name, a]));
@@ -175,7 +180,7 @@ describe("seedDemoMasterData - real 財務管理處 (17203) master data, 62 deta
     await seedDemoMasterData(TEST_BYPASS_USER_ID);
 
     expect(await prisma.department.count({ where: { code: DEMO_DEPARTMENT_CODE } })).toBe(1);
-    expect(await prisma.account.count({ where: { code: { in: DEMO_ACCOUNTS.map((a) => a.code) } } })).toBe(62);
+    expect(await prisma.account.count({ where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } } })).toBe(62);
   });
 
   it("never touches or removes pre-existing real department/account master data", async () => {
@@ -407,6 +412,63 @@ describe("legacy DEMO-DEPT / DEMO-ACC-* cleanup - safe and idempotent", () => {
   });
 });
 
+describe("FIN-<seq> -> Excel 序號 account code migration - upgrading a database seeded before this change", () => {
+  it("migrates a pre-existing FIN-<seq> coded row to the plain 序號 code in place (same id), rather than duplicating it", async () => {
+    // Simulate a Preview database seeded by the earlier version of
+    // seedDemoMasterData, which wrote provisional "FIN-003"-style codes.
+    const preExisting = await prisma.account.create({
+      data: {
+        code: "FIN-003",
+        name: "薪資支出",
+        majorCategory: DEMO_DEPARTMENT_CLASS,
+        commonCategory: "PERSONNEL",
+        entryType: "DEPARTMENT_INPUT",
+        isProvisionalCode: true,
+        sourceSeq: 3,
+        sourceRef: "2026年度費用預算V2--財務.xlsx｜財務工作表｜序3",
+        priorYearReferenceAmount: "7905511",
+      },
+    });
+
+    setEnv("preview", "true");
+    const result = await seedDemoMasterData(TEST_BYPASS_USER_ID);
+
+    expect(result.accountCount).toBe(62);
+    // Same row (same id), migrated in place - never duplicated.
+    expect(await prisma.account.count({ where: { sourceSeq: 3 } })).toBe(1);
+    const migrated = await prisma.account.findUniqueOrThrow({ where: { id: preExisting.id } });
+    expect(migrated.code).toBe("3");
+    expect(migrated.isProvisionalCode).toBe(false);
+    expect(migrated.sourceSeq).toBe(3);
+
+    // Re-running again (idempotent) still converges to exactly 62 accounts,
+    // no duplicates left behind by the migration.
+    const second = await seedDemoMasterData(TEST_BYPASS_USER_ID);
+    expect(second.accountCount).toBe(62);
+    expect(await prisma.account.count({ where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } } })).toBe(62);
+  });
+
+  it("rolls back the whole batch and returns a clear 繁體中文 error when the new code collides with a different account's existing code", async () => {
+    // A pre-existing, unrelated real account already using code "3" (not
+    // itself a DEMO row - sourceSeq is null) - the new Excel-序號-based
+    // code for 序3 薪資支出 would collide with it.
+    const unrelated = await prisma.account.create({
+      data: { code: "3", name: "真實科目", majorCategory: "M", commonCategory: "OFFICE", entryType: "DEPARTMENT_INPUT" },
+    });
+
+    setEnv("preview", "true");
+    await expect(seedDemoMasterData(TEST_BYPASS_USER_ID)).rejects.toThrow(ApiError);
+    await expect(seedDemoMasterData(TEST_BYPASS_USER_ID)).rejects.toThrow(/科目編號.*衝突|衝突.*科目編號/);
+
+    // Whole batch rolled back - nothing from this failed attempt was
+    // created, and the unrelated account is completely untouched.
+    expect(await prisma.department.findUnique({ where: { code: DEMO_DEPARTMENT_CODE } })).toBeNull();
+    const unrelatedAfter = await prisma.account.findUniqueOrThrow({ where: { id: unrelated.id } });
+    expect(unrelatedAfter.code).toBe("3");
+    expect(unrelatedAfter.name).toBe("真實科目");
+  });
+});
+
 describe("Preview bypass admin can hand-build and submit a test budget end to end", () => {
   it("creates a draft pre-populated with the real 2025 reference amounts (read-only), edits the 2026 amount, persists across a fresh reload, and submits", async () => {
     setEnv("preview", "true");
@@ -419,7 +481,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
     // Never write the virtual sentinel id into this real User foreign key.
     expect(draft.preparedById).toBeNull();
 
-    const salaryAccount = await prisma.account.findUniqueOrThrow({ where: { code: "FIN-003" } });
+    const salaryAccount = await prisma.account.findUniqueOrThrow({ where: { code: "3" } });
     const line = await prisma.budgetLine.findFirstOrThrow({
       where: { budgetVersionId: draft.id, accountId: salaryAccount.id },
     });
@@ -486,8 +548,8 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
 
-    // FIN-004 業績獎金 has priorYearReferenceAmount "0" in the source spreadsheet.
-    const zeroRefAccount = await prisma.account.findUniqueOrThrow({ where: { code: "FIN-004" } });
+    // 序4 業績獎金 (code "4") has priorYearReferenceAmount "0" in the source spreadsheet.
+    const zeroRefAccount = await prisma.account.findUniqueOrThrow({ where: { code: "4" } });
     const line = await prisma.budgetLine.findFirstOrThrow({
       where: { budgetVersionId: draft.id, accountId: zeroRefAccount.id },
     });
@@ -513,7 +575,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
     const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
-    const account = await prisma.account.findUniqueOrThrow({ where: { code: "FIN-039" } }); // 郵電費
+    const account = await prisma.account.findUniqueOrThrow({ where: { code: "39" } }); // 郵電費
     const line = await prisma.budgetLine.findFirstOrThrow({ where: { budgetVersionId: draft.id, accountId: account.id } });
 
     await updateDepartmentInputLine(bypassUser, draft.id, line.id, {
@@ -524,7 +586,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
     const accountAfter = await prisma.account.findUniqueOrThrow({ where: { id: account.id } });
     expect(accountAfter.name).toBe("郵電費");
-    expect(accountAfter.code).toBe("FIN-039");
+    expect(accountAfter.code).toBe("39");
     expect(accountAfter.commonCategory).toBe("OFFICE");
   });
 
@@ -536,10 +598,10 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
 
     const salaryLine = await prisma.budgetLine.findFirstOrThrow({
-      where: { budgetVersionId: draft.id, account: { code: "FIN-003" } },
+      where: { budgetVersionId: draft.id, account: { code: "3" } },
     });
     const postageLine = await prisma.budgetLine.findFirstOrThrow({
-      where: { budgetVersionId: draft.id, account: { code: "FIN-039" } },
+      where: { budgetVersionId: draft.id, account: { code: "39" } },
     });
     await updateDepartmentInputLine(bypassUser, draft.id, salaryLine.id, {
       nextYearTargetExcludingNew: "8000000",
@@ -555,7 +617,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
     const personnelRow = summary.rows.find((r) => r.category === "PERSONNEL")!;
     const officeRow = summary.rows.find((r) => r.category === "OFFICE")!;
-    // Only FIN-003 (人事) and FIN-039 (辦公) were changed from 0, so those
+    // Only code "3" (人事) and code "39" (辦公) were changed from 0, so those
     // two categories' totals must equal exactly what was entered.
     expect(personnelRow.total.toString()).toBe("8000000");
     expect(officeRow.total.toString()).toBe("35000");

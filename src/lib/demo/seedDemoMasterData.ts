@@ -15,6 +15,7 @@ import {
   LEGACY_DEMO_DEPARTMENT_CODE,
   LEGACY_DEMO_ACCOUNT_CODES,
   demoSourceRef,
+  demoAccountCode,
 } from "./constants";
 
 export interface DemoSeedResult {
@@ -48,14 +49,26 @@ interface AccountUpsertRow {
  * creates a BudgetVersion/BudgetLine or any 2026 budget amount - those must
  * be entered by hand on the budget screen (see BudgetVersionClient.tsx).
  *
- * Idempotent by design: upserts on unique codes, so calling this repeatedly
- * never produces duplicate rows. Also safely retires (deactivates, never
- * deletes) any rows left over from the earlier DEMO-DEPT/DEMO-ACC-*
- * placeholder data, so re-running this after upgrading from that version
- * converges a Preview database to exactly the 62 real accounts without
- * requiring a separate manual cleanup step. Only ever touches rows matching
- * those specific legacy codes or this function's own DEMO_ACCOUNTS/
- * DEMO_DEPARTMENT_CODE - never any other master data.
+ * Idempotent by design: upserts on the unique `sourceSeq` (the Excel A欄
+ * 序號, stable across code changes) rather than on `code` itself, so calling
+ * this repeatedly never produces duplicate rows - including the one-time
+ * upgrade from the retired FIN-<seq> provisional codes to the real Excel
+ * A欄 序號 as `code` (see demoAccountCode()): a row already seeded under the
+ * old FIN-003-style code is matched by its unchanged sourceSeq and has its
+ * `code`/`isProvisionalCode` updated in place, never re-created under a new
+ * id. Also safely retires (deactivates, never deletes) any rows left over
+ * from the earlier DEMO-DEPT/DEMO-ACC-* placeholder data, so re-running
+ * this after upgrading from that version converges a Preview database to
+ * exactly the 62 real accounts without requiring a separate manual cleanup
+ * step. Only ever touches rows matching those specific legacy codes or this
+ * function's own DEMO_ACCOUNTS/DEMO_DEPARTMENT_CODE - never any other
+ * master data.
+ *
+ * `code` remains @unique, so if the real Excel 序號 for one of these
+ * accounts were ever to collide with a *different* account's existing code
+ * (not itself - matched separately by sourceSeq), the whole batch is rolled
+ * back (see the catch block below) and a clear 繁體中文 error is thrown
+ * rather than a raw Postgres constraint error.
  *
  * Gated on isAuthBypassEnabled() (fail-closed, Preview-only - see
  * lib/env.ts), so this can never run in Production and is never reachable
@@ -112,14 +125,17 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
   // One multi-row INSERT ... ON CONFLICT DO UPDATE for all 62 accounts,
   // instead of 62 individual upserts. `id` is only used when inserting a
   // brand-new row - on conflict the existing row's id is left untouched
-  // (it is deliberately absent from the DO UPDATE SET list below), so this
-  // stays a pure upsert-by-code exactly like the previous per-row version.
+  // (it is deliberately absent from the DO UPDATE SET list below). The
+  // conflict target is `sourceSeq` (the stable Excel A欄 序號), not `code`:
+  // `code` is exactly what this upsert needs to be able to change (the
+  // FIN-<seq> -> plain 序號 migration) without losing the existing row, so
+  // it cannot also be what identifies "the same row" across that change.
   const accountValueRows = Prisma.join(
     DEMO_ACCOUNTS.map(
       (item) => Prisma.sql`(
-        ${randomUUID()}, ${item.code}, ${item.name},
+        ${randomUUID()}, ${demoAccountCode(item.seq)}, ${item.name},
         ${DEMO_DEPARTMENT_CLASS}::"DeptClass", ${item.commonCategory}::"AccountCommonCategory",
-        'DEPARTMENT_INPUT'::"AccountEntryType", true, true,
+        'DEPARTMENT_INPUT'::"AccountEntryType", true, false,
         ${item.seq}, ${demoSourceRef(item.seq)}, ${item.priorYearReferenceAmount}::numeric,
         now(), now()
       )`
@@ -135,15 +151,15 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
       "createdAt", "updatedAt"
     )
     VALUES ${accountValueRows}
-    ON CONFLICT ("code") DO UPDATE SET
+    ON CONFLICT ("sourceSeq") DO UPDATE SET
+      "code" = EXCLUDED."code",
       "name" = EXCLUDED."name",
       "majorCategory" = EXCLUDED."majorCategory",
       "commonCategory" = EXCLUDED."commonCategory",
       "entryType" = EXCLUDED."entryType",
       "formulaKey" = NULL,
       "isActive" = true,
-      "isProvisionalCode" = true,
-      "sourceSeq" = EXCLUDED."sourceSeq",
+      "isProvisionalCode" = false,
       "sourceRef" = EXCLUDED."sourceRef",
       "priorYearReferenceAmount" = EXCLUDED."priorYearReferenceAmount",
       "updatedAt" = now()
@@ -155,12 +171,37 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
   // Node.js round trip in between, so a partial failure (e.g. a bad row)
   // rolls back everything - never leaving a half-seeded master data set -
   // and there is no interactive-transaction timeout to tune or exceed.
-  const [legacyAccountRows, legacyDepartmentRows, department, accountRows] = await prisma.$transaction([
-    legacyAccountRetireQuery,
-    legacyDepartmentRetireQuery,
-    departmentUpsertQuery,
-    accountUpsertQuery,
-  ]);
+  let legacyAccountRows: { code: string }[];
+  let legacyDepartmentRows: { code: string }[];
+  let department: { id: string; code: string; name: string };
+  let accountRows: AccountUpsertRow[];
+  try {
+    [legacyAccountRows, legacyDepartmentRows, department, accountRows] = await prisma.$transaction([
+      legacyAccountRetireQuery,
+      legacyDepartmentRetireQuery,
+      departmentUpsertQuery,
+      accountUpsertQuery,
+    ]);
+  } catch (err) {
+    // Raw-SQL unique-violation on "code" (Postgres error 23505 on the
+    // Account_code_key index) surfaces from $queryRaw as Prisma error code
+    // P2010 ("Raw query failed"), with the underlying Postgres error
+    // (code + "Key (code)=(...) already exists." message) in `meta`. This
+    // can only mean the new Excel-序號-based code for one account collided
+    // with a *different* account's existing code (the row being upserted
+    // itself is matched by sourceSeq, not code - see the ON CONFLICT target
+    // above). The whole batch transaction has already been rolled back by
+    // Postgres at this point (never a partial write) - surface a clear
+    // 繁體中文 error instead of the raw constraint message.
+    const meta = err instanceof Prisma.PrismaClientKnownRequestError ? (err.meta as { code?: string; message?: string } | undefined) : undefined;
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2010" && meta?.code === "23505" && meta.message?.includes("(code)")) {
+      throw new ApiError(
+        409,
+        "科目編號更新失敗：新的科目編號（來源 Excel 序號）與現有其他科目的編號衝突，本次初始化已完整回滾，未異動任何資料，請聯絡系統管理員確認科目主檔"
+      );
+    }
+    throw err;
+  }
 
   if (accountRows.length !== DEMO_ACCOUNT_COUNT) {
     // Fail loudly rather than silently returning a truncated/duplicated
@@ -214,7 +255,7 @@ export async function getDemoSeedStatus(): Promise<DemoSeedResult | null> {
   if (!department) return null;
 
   const accounts = await prisma.account.findMany({
-    where: { code: { in: DEMO_ACCOUNTS.map((a) => a.code) } },
+    where: { sourceSeq: { in: DEMO_ACCOUNTS.map((a) => a.seq) } },
     orderBy: { sourceSeq: "asc" },
   });
 
