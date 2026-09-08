@@ -13,6 +13,35 @@ import { DEMO_DEPARTMENT_NAME } from "@/lib/demo/constants";
  */
 
 /**
+ * The preview's "2027目標計畫" column set must be sourced ONLY from a
+ * BudgetVersion whose fiscalYear is exactly this value - never "whichever
+ * version was most recently touched" (that would risk silently displaying
+ * the real, currently-in-progress 2026 budget under a 2027 label). See
+ * page.tsx's query and the "五、資料正確性" requirements this satisfies.
+ */
+export const PREVIEW_TARGET_FISCAL_YEAR = 2027;
+
+/** The "2026推估" column is that same fiscalYear=2027 version's own prior-year reference figure - not a separately queried 2026 BudgetVersion. */
+export const PREVIEW_BASE_YEAR_LABEL = "2026推估";
+
+/**
+ * Shown in place of the generic "未編製" (used for representative-only
+ * departments with no data at all) specifically for 財務管理處 when no
+ * fiscalYear=2027 BudgetVersion exists yet - distinguishes "this department
+ * has real data, just not for next year's target" from "no data was ever
+ * entered for this representative department".
+ */
+export const TARGET_YEAR_NOT_PREPARED_LABEL = `${PREVIEW_TARGET_FISCAL_YEAR}年度尚未編製`;
+
+/**
+ * Disclaimer required whenever any real 財務管理處 figures are displayed
+ * under the 2027目標 columns: this is layout/template scaffolding, not the
+ * official 2027 budget (see spec 五-5, "版型示意數字").
+ */
+export const TEMPLATE_FIGURES_DISCLAIMER =
+  "以下財務管理處數字為「版型示意數字」，僅供版面配置測試使用，非正式2027年度預算。";
+
+/**
  * 海外歸類規則: every overseas/offshore unit is filed under 營業單位 in this
  * preview, per instruction - never its own block.
  */

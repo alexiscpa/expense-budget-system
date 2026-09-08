@@ -6,7 +6,12 @@ import type { AccountCommonCategory, BudgetStatus } from "@prisma/client";
 import { CATEGORY_LABELS, CATEGORY_ORDER } from "@/lib/budget/categorySummary";
 import { sumDecimals, growthRate } from "@/lib/money/decimal";
 import { formatAmountCell, formatCountCell, formatGrowthRateCell } from "@/lib/reports/summaryFormat";
-import { UNIT_BLOCKS, PRODUCTION_PLACEHOLDER_ROWS } from "@/lib/reports/budgetSummaryPreviewData";
+import {
+  UNIT_BLOCKS,
+  PRODUCTION_PLACEHOLDER_ROWS,
+  TARGET_YEAR_NOT_PREPARED_LABEL,
+  TEMPLATE_FIGURES_DISCLAIMER,
+} from "@/lib/reports/budgetSummaryPreviewData";
 import { formatTaipeiDate } from "@/lib/format/date";
 
 interface FinanceLineDto {
@@ -218,6 +223,7 @@ export function BudgetSummaryPreviewClient({
       <h1 className="mb-1 text-xl font-bold">費用預算彙總表（版型預覽）</h1>
       <p className="mb-4 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
         版型預覽：目前僅財務管理處為實際測試資料，其他部門尚未匯入。
+        {financeVersion && ` ${TEMPLATE_FIGURES_DISCLAIMER}`}
       </p>
 
       <div className="mb-4 flex gap-2 border-b border-slate-200">
@@ -252,9 +258,9 @@ export function BudgetSummaryPreviewClient({
 const UNIT_COL_WIDTHS = [160, 90, 140, 90, 140, 130, 150, 130, 110, 100, 150];
 const UNIT_HEADER_GROUPS: HeaderGroup[] = [
   { label: "部門", span: 1 },
-  { label: "2025推估", span: 2 },
-  { label: "2026目標計畫", span: 4 },
-  { label: "與2025比較", span: 2 },
+  { label: "2026推估", span: 2 },
+  { label: "2027目標計畫", span: 4 },
+  { label: "與2026推估比較", span: 2 },
   { label: "編製情形", span: 2 },
 ];
 const UNIT_HEADER_LABELS = [
@@ -284,7 +290,8 @@ function UnitTab({
     <div>
       {UNIT_BLOCKS.map((block) => {
         const rows: TableRow[] = block.departments.map((name) => {
-          const isFinance = financeDepartment && name === financeDepartment.name && financeVersion && financeAgg;
+          const isFinanceDept = Boolean(financeDepartment && name === financeDepartment.name);
+          const isFinance = isFinanceDept && financeVersion && financeAgg;
           if (isFinance && financeVersion && financeAgg) {
             return {
               cells: [
@@ -302,6 +309,9 @@ function UnitTab({
               ],
             };
           }
+          // 財務管理處 has real BudgetVersion data for other fiscal years,
+          // just not (yet) for the 2027 target year - distinct status from
+          // the generic "未編製" used for representative-only departments.
           return {
             cells: [
               textCell(name),
@@ -313,7 +323,7 @@ function UnitTab({
               cell("—"),
               cell("—"),
               cell("—"),
-              cell("未編製", false, "left"),
+              cell(isFinanceDept ? TARGET_YEAR_NOT_PREPARED_LABEL : "未編製", false, "left"),
               cell("—", false, "left"),
             ],
           };
@@ -379,17 +389,17 @@ function UnitTab({
 const ACCOUNT_COL_WIDTHS = [60, 220, 130, 130, 130, 140, 130, 120, 130, 120];
 const ACCOUNT_HEADER_GROUPS: HeaderGroup[] = [
   { label: "基本資料", span: 2 },
-  { label: "2025推估", span: 1 },
-  { label: "2026目標計畫", span: 3 },
-  { label: "與2025比較", span: 4 },
+  { label: "2026推估", span: 1 },
+  { label: "2027目標計畫", span: 3 },
+  { label: "與2026推估比較", span: 4 },
 ];
 const ACCOUNT_HEADER_LABELS = [
   "序",
   "項目",
-  "金額",
-  "不含新員",
-  "新員預算",
-  "合計（含新員）",
+  "2026推估",
+  "2027目標不含新員",
+  "2027目標新員",
+  "2027合計（含新員）",
   "不含新員增減",
   "不含新員成長率",
   "含新員增減",
@@ -524,7 +534,7 @@ function SgaTab({
         />
       ) : (
         <p className="rounded border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-          財務管理處尚無可讀取的預算資料（尚未初始化 DEMO 主檔或尚未建立預算版本）。
+          財務管理處{TARGET_YEAR_NOT_PREPARED_LABEL}，尚無 2027 年度資料可供彙總（現有 2026 年度預算資料不會顯示於本欄）。
         </p>
       )}
     </div>
@@ -577,7 +587,7 @@ function ProductionTab({ financeAgg }: { financeAgg: ReturnType<typeof buildFina
 function SummaryBanner({ sgaAgg }: { sgaAgg: ReturnType<typeof buildFinanceAgg> }) {
   const colWidths = [160, 100, 100, 100, 100, 100, 90];
   const headerGroups: HeaderGroup[] = [{ label: "全公司費用合計區", span: 7 }];
-  const headerLabels = ["項目", "2025推估", "2026不含新員", "2026新員", "2026合計", "增減金額", "增減率"];
+  const headerLabels = ["項目", "2026推估", "2027不含新員", "2027新員", "2027合計", "增減金額", "增減率"];
 
   const sgaRow: TableRow = sgaAgg
     ? {
