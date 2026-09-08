@@ -212,7 +212,7 @@ model Department {
   // priorYearHeadcount (read-only prior-year reference) and initial
   // budgetYearHeadcount (the draft's own fiscal year, user-editable) from
   // this value instead of leaving them at 0/null.
-  priorYearHeadcount Int?
+  priorYearHeadcount           Int?
   // Which fiscal year priorYearHeadcount actually represents (e.g. 2025 for
   // a figure sourced from a "2025推移" column). A new draft for fiscal year
   // Y only uses priorYearHeadcount as its prior-year reference when this
@@ -263,7 +263,7 @@ model Account {
   // reference fields from this value instead of leaving them at 0/
   // "資料不全" - still never a fabricated figure, only ever set from a
   // real, controlled import.
-  priorYearReferenceAmount Decimal? @db.Decimal(18, 2)
+  priorYearReferenceAmount     Decimal? @db.Decimal(18, 2)
   // Which fiscal year priorYearReferenceAmount actually represents (e.g.
   // 2025 for a figure sourced from a "2025推移" column in a spreadsheet
   // covering the 2026 budgeting cycle). A new draft for fiscal year Y only
@@ -371,7 +371,7 @@ model BudgetVersion {
   // subject to the exact same isEditable()/isLocked-style workflow gating
   // as every other budget figure.
   priorYearHeadcount  Int?
-  budgetYearHeadcount Int @default(0)
+  budgetYearHeadcount Int  @default(0)
 
   // 最後一次編製日期 (last prepared date) - deliberately separate from
   // `updatedAt`, which also moves on every workflow/state transition
