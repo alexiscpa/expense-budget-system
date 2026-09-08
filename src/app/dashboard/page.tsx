@@ -65,6 +65,20 @@ export default async function DashboardPage() {
       </div>
 
       {bypassActive && <DemoSeedPanel initialStatus={demoSeedStatus} />}
+      {bypassActive && (
+        <div className="mb-8 rounded border border-indigo-300 bg-indigo-50 p-4">
+          <p className="mb-1 text-sm font-semibold text-indigo-900">費用預算彙總表（版型預覽）</p>
+          <p className="mb-3 text-xs text-indigo-700">
+            版型預覽：目前僅財務管理處為實際測試資料，其他部門尚未匯入。
+          </p>
+          <Link
+            href="/dashboard/reports/budget-summary-preview"
+            className="inline-block rounded bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700"
+          >
+            開啟彙總表版型預覽
+          </Link>
+        </div>
+      )}
       {canCreateDraft && (
         <CreateBudgetVersionForm
           departments={departmentOptions}
