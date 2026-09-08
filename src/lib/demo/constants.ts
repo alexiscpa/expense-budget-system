@@ -48,6 +48,13 @@ export const DEMO_DEPARTMENT_CLASS = "M" as const;
 // comparison - not a far-future placeholder year.
 export const DEMO_FISCAL_YEAR = 2026;
 
+// The real spreadsheet's reference figures ("2025推移" in column F, see
+// DEMO_ACCOUNTS below) represent 2025, the fiscal year immediately before
+// DEMO_FISCAL_YEAR - never a hardcoded "2025" scattered elsewhere; every
+// consumer (seedDemoMasterData.ts, createBudgetVersionDraft) derives it from
+// DEMO_FISCAL_YEAR so the two can never drift apart.
+export const DEMO_PRIOR_REFERENCE_FISCAL_YEAR = DEMO_FISCAL_YEAR - 1;
+
 export const DEMO_SOURCE_FILE_NAME = "2026年度費用預算V2--財務.xlsx";
 export const DEMO_SOURCE_SHEET_NAME = "財務";
 

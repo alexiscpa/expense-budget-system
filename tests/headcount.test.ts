@@ -32,13 +32,20 @@ beforeEach(async () => {
 
 /**
  * A department with a known 2025 reference headcount (10, matching the real
- * DEMO figure) plus one real account so createBudgetVersionDraft can
- * succeed. Pass `null` explicitly (not `undefined` - a JS default parameter
- * only substitutes for a truly omitted/undefined argument, not an explicit
- * null) to test the "no known reference" case.
+ * DEMO figure), tagged as actually representing 2025 (so a fiscalYear=2026
+ * draft's referenceYear=2025 check passes), plus one real account so
+ * createBudgetVersionDraft can succeed. Pass `null` explicitly (not
+ * `undefined` - a JS default parameter only substitutes for a truly
+ * omitted/undefined argument, not an explicit null) to test the "no known
+ * reference" case; pass `referenceFiscalYear` to test the "reference exists
+ * but for the wrong year" case independently of the amount itself.
  */
-async function setupDeptWithOwner(priorYearHeadcount: number | null = 10) {
-  const dept = await createDepartment({ code: `HC${Date.now()}${Math.random()}`, priorYearHeadcount });
+async function setupDeptWithOwner(priorYearHeadcount: number | null = 10, referenceFiscalYear: number | null = 2025) {
+  const dept = await createDepartment({
+    code: `HC${Date.now()}${Math.random()}`,
+    priorYearHeadcount,
+    priorYearReferenceFiscalYear: referenceFiscalYear,
+  });
   const owner = await createUser({ role: "BUDGET_OWNER", companyWide: false });
   await grantDepartmentScope(owner.id, dept.id);
   await createAccount({ entryType: "DEPARTMENT_INPUT", majorCategory: dept.class });
@@ -54,8 +61,8 @@ describe("BudgetVersion 部門人數 (headcount) - draft creation", () => {
     expect(draft.budgetYearHeadcount).toBe(10);
   });
 
-  it("a department with no known reference headcount starts a new draft at 0/0, never fabricated", async () => {
-    const { dept, owner } = await setupDeptWithOwner(null);
+  it("a department with no known reference headcount starts a new draft at —/0, never fabricated", async () => {
+    const { dept, owner } = await setupDeptWithOwner(null, null);
     // createDepartment leaves priorYearHeadcount undefined -> null in the DB
     // when no override is given; re-fetch to confirm before asserting the
     // derived draft value.
@@ -63,8 +70,25 @@ describe("BudgetVersion 部門人數 (headcount) - draft creation", () => {
     expect(deptRow.priorYearHeadcount).toBeNull();
 
     const draft = await createBudgetVersionDraft(toCurrentUser(owner), dept.id, 2026);
-    expect(draft.priorYearHeadcount).toBe(0);
+    expect(draft.priorYearHeadcount).toBeNull();
     expect(draft.budgetYearHeadcount).toBe(0);
+  });
+
+  it("a department with a real reference headcount tagged for the WRONG fiscal year still starts a new draft at null/0, never relabeled", async () => {
+    // The department genuinely has priorYearHeadcount=10, but it is tagged
+    // as representing 2025 - a fiscalYear=2028 draft needs a 2027 reference,
+    // so this figure must never be reused as if it were 2027's.
+    const { dept, owner } = await setupDeptWithOwner(10, 2025);
+    const draft = await createBudgetVersionDraft(toCurrentUser(owner), dept.id, 2028);
+    expect(draft.priorYearHeadcount).toBeNull();
+    expect(draft.budgetYearHeadcount).toBe(0);
+  });
+
+  it("a department whose reference is tagged for exactly fiscalYear-1 is used, generalizing beyond 2025/2026 (e.g. 2027 -> 2028)", async () => {
+    const { dept, owner } = await setupDeptWithOwner(15, 2027);
+    const draft = await createBudgetVersionDraft(toCurrentUser(owner), dept.id, 2028);
+    expect(draft.priorYearHeadcount).toBe(15);
+    expect(draft.budgetYearHeadcount).toBe(15);
   });
 });
 

@@ -31,7 +31,11 @@ beforeEach(async () => {
 });
 
 async function setupDeptWithOwner() {
-  const dept = await createDepartment({ code: `WD${Date.now()}${Math.random()}`, priorYearHeadcount: 10 });
+  const dept = await createDepartment({
+    code: `WD${Date.now()}${Math.random()}`,
+    priorYearHeadcount: 10,
+    priorYearReferenceFiscalYear: 2025, // matches the 2026 drafts this file creates (referenceYear = 2026 - 1)
+  });
   const owner = await createUser({ role: "BUDGET_OWNER", companyWide: false });
   await grantDepartmentScope(owner.id, dept.id);
   await createAccount({ entryType: "DEPARTMENT_INPUT", majorCategory: dept.class });

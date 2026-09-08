@@ -78,18 +78,29 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
     throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
   }
 
+  // Every "prior-year reference" figure (Department.priorYearHeadcount,
+  // Account.priorYearReferenceAmount below) is only ever valid for the
+  // fiscal year immediately before the one being drafted - never reused
+  // across a year it doesn't match, which would silently relabel an older
+  // (or newer) year's figure as if it were referenceYear's. See the schema
+  // comments on priorYearReferenceFiscalYear for why this exists.
+  const referenceYear = fiscalYear - 1;
+
   // 部門人數 (department headcount) is not an accounting line item - it has
   // no Account/BudgetLine, so it is seeded directly from the department's
   // own reference figure (Department.priorYearHeadcount, set via
   // seedDemoMasterData.ts for the 17203 demo department - see its schema
-  // comment), never fabricated. A department with no known reference yet
-  // simply starts both figures at 0, exactly like an account with no
-  // priorYearReferenceAmount starts its line at 0/"資料不全，待確認".
+  // comment), never fabricated, and only when that figure is confirmed to
+  // represent referenceYear. A department with no known (or wrong-year)
+  // reference simply starts both figures at null/0, exactly like an
+  // account with no valid priorYearReferenceAmount starts its line at
+  // 0/"資料不全，待確認".
   const department = await prisma.department.findUnique({
     where: { id: departmentId },
-    select: { priorYearHeadcount: true },
+    select: { priorYearHeadcount: true, priorYearReferenceFiscalYear: true },
   });
-  const priorYearHeadcount = department?.priorYearHeadcount ?? 0;
+  const departmentReferenceValid = department?.priorYearReferenceFiscalYear === referenceYear;
+  const priorYearHeadcount = departmentReferenceValid ? (department?.priorYearHeadcount ?? null) : null;
 
   // Set explicitly (rather than relying on @default(now())/@updatedAt at
   // the DB layer) so every freshly created line has createdAt and
@@ -120,13 +131,17 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
     }
 
     // When the account carries a known prior-year reference amount (set
-    // via a controlled import - see Account.priorYearReferenceAmount),
-    // seed both read-only reference columns from it instead of leaving
-    // them at 0/"資料不全，待確認": it doubles as the account's most
-    // recently known "原核定預算" (目標) AND "全年推估數" (推移) for a
-    // department that has not yet had a full multi-column prior-year
-    // import - the same real figure, never a fabricated second number.
-    const referenceAmount = account.priorYearReferenceAmount;
+    // via a controlled import - see Account.priorYearReferenceAmount) AND
+    // that figure is confirmed to represent referenceYear (fiscalYear - 1),
+    // seed both read-only reference columns from it instead of leaving them
+    // at 0/"資料不全，待確認": it doubles as the account's most recently
+    // known "原核定預算" (目標) AND "全年推估數" (推移) for a department
+    // that has not yet had a full multi-column prior-year import - the same
+    // real figure, never a fabricated second number. A reference tagged for
+    // any other year (or not tagged at all) is treated exactly like "no
+    // reference" - it must never be reused relabeled as referenceYear's.
+    const accountReferenceValid = account.priorYearReferenceFiscalYear === referenceYear;
+    const referenceAmount = accountReferenceValid ? account.priorYearReferenceAmount : null;
     const priorYearOriginalBudget = referenceAmount ?? new Decimal(0);
     const derived = deriveLineTotals({
       priorYearOriginalBudget,
@@ -162,13 +177,14 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
       fiscalYear,
       versionNumber: 1,
       status: "DRAFT",
-      // Initial 2026 headcount starts equal to the 2025 reference (exactly
-      // like every DEPARTMENT_INPUT BudgetLine's 2026 amount would start
-      // at its own prior-year reference if the source data provided one) -
-      // the user then edits it directly on this BudgetVersion, never
-      // through the per-account line API.
+      // Initial budgetYear headcount starts equal to the confirmed
+      // referenceYear figure when one exists (exactly like every
+      // DEPARTMENT_INPUT BudgetLine's budgetYear amount would start at its
+      // own valid prior-year reference), otherwise 0 - the user then edits
+      // it directly on this BudgetVersion, never through the per-account
+      // line API.
       priorYearHeadcount,
-      budgetYearHeadcount: priorYearHeadcount,
+      budgetYearHeadcount: priorYearHeadcount ?? 0,
       // Set explicitly to the same JS Date used for every line's
       // createdAt/updatedAt above, rather than relying on
       // @default(now())/@updatedAt (evaluated by Postgres at insert time,

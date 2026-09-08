@@ -206,11 +206,20 @@ model Department {
   // independent of any specific BudgetVersion - mirrors
   // Account.priorYearReferenceAmount (same rationale: a real, controlled
   // figure, never fabricated per-department, left null until actually
-  // known). When set, a newly created BudgetVersion draft (see
-  // createBudgetVersionDraft) seeds both its priorYearHeadcount (read-only
-  // 2025 reference) and initial budgetYearHeadcount (2026, user-editable)
-  // from this value instead of leaving them at 0.
+  // known). When set AND priorYearReferenceFiscalYear matches the fiscal
+  // year immediately before the one being drafted, a newly created
+  // BudgetVersion draft (see createBudgetVersionDraft) seeds both its
+  // priorYearHeadcount (read-only prior-year reference) and initial
+  // budgetYearHeadcount (the draft's own fiscal year, user-editable) from
+  // this value instead of leaving them at 0/null.
   priorYearHeadcount Int?
+  // Which fiscal year priorYearHeadcount actually represents (e.g. 2025 for
+  // a figure sourced from a "2025推移" column). A new draft for fiscal year
+  // Y only uses priorYearHeadcount as its prior-year reference when this
+  // equals exactly Y-1 - never reused across a year it doesn't match (that
+  // would silently relabel an older year's figure as if it were Y-1's).
+  // Null means "no confirmed reference year at all".
+  priorYearReferenceFiscalYear Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -247,12 +256,22 @@ model Account {
   sourceRef         String?
 
   // Most recently known prior-year reference amount for this account,
-  // independent of any specific BudgetVersion. When set, a newly created
-  // BudgetVersion draft (see createBudgetVersionDraft) seeds its
-  // BudgetLine's read-only prior-year reference fields from this value
-  // instead of leaving them at 0 - still never a fabricated figure, only
-  // ever set from a real, controlled import.
+  // independent of any specific BudgetVersion. When set AND
+  // priorYearReferenceFiscalYear matches the fiscal year immediately before
+  // the one being drafted, a newly created BudgetVersion draft (see
+  // createBudgetVersionDraft) seeds its BudgetLine's read-only prior-year
+  // reference fields from this value instead of leaving them at 0/
+  // "資料不全" - still never a fabricated figure, only ever set from a
+  // real, controlled import.
   priorYearReferenceAmount Decimal? @db.Decimal(18, 2)
+  // Which fiscal year priorYearReferenceAmount actually represents (e.g.
+  // 2025 for a figure sourced from a "2025推移" column in a spreadsheet
+  // covering the 2026 budgeting cycle). A new draft for fiscal year Y only
+  // uses priorYearReferenceAmount as its prior-year reference when this
+  // equals exactly Y-1 - a draft for any other fiscal year must never reuse
+  // it relabeled as if it were that year's reference; see
+  // createBudgetVersionDraft. Null means "no confirmed reference year".
+  priorYearReferenceFiscalYear Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -339,14 +358,19 @@ model BudgetVersion {
   // Account/BudgetLine (see docs on DEMO_ACCOUNTS in demo/constants.ts for
   // why 序1「平均人數」is deliberately excluded from the chart of accounts)
   // and never included in any category subtotal or the 管理費用 grand
-  // total. priorYearHeadcount is the read-only 2025 reference (seeded once
-  // at draft creation from Department.priorYearHeadcount, never editable
-  // through the regular budget-line API); budgetYearHeadcount is the 2026
-  // figure the preparer edits directly on this BudgetVersion (see
+  // total. priorYearHeadcount is the read-only prior-year reference (fiscal
+  // year = this version's fiscalYear - 1), seeded once at draft creation
+  // from Department.priorYearHeadcount ONLY when
+  // Department.priorYearReferenceFiscalYear actually matches fiscalYear-1
+  // (see createBudgetVersionDraft) - null when no such confirmed reference
+  // exists, never a stale/mismatched-year figure relabeled as if it were
+  // fiscalYear-1's. Never editable through the regular budget-line API.
+  // budgetYearHeadcount is this version's own fiscal-year figure the
+  // preparer edits directly on this BudgetVersion (see
   // updateBudgetYearHeadcount) while the version is in an editable state,
   // subject to the exact same isEditable()/isLocked-style workflow gating
   // as every other budget figure.
-  priorYearHeadcount  Int @default(0)
+  priorYearHeadcount  Int?
   budgetYearHeadcount Int @default(0)
 
   // 最後一次編製日期 (last prepared date) - deliberately separate from

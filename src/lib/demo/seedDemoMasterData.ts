@@ -11,6 +11,7 @@ import {
   DEMO_DEPARTMENT_CLASS,
   DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT,
   DEMO_FISCAL_YEAR,
+  DEMO_PRIOR_REFERENCE_FISCAL_YEAR,
   DEMO_ACCOUNTS,
   DEMO_ACCOUNT_COUNT,
   LEGACY_DEMO_DEPARTMENT_CODE,
@@ -118,12 +119,14 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
       class: DEMO_DEPARTMENT_CLASS,
       isActive: true,
       priorYearHeadcount: DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT,
+      priorYearReferenceFiscalYear: DEMO_PRIOR_REFERENCE_FISCAL_YEAR,
     },
     create: {
       code: DEMO_DEPARTMENT_CODE,
       name: DEMO_DEPARTMENT_NAME,
       class: DEMO_DEPARTMENT_CLASS,
       priorYearHeadcount: DEMO_DEPARTMENT_PRIOR_YEAR_HEADCOUNT,
+      priorYearReferenceFiscalYear: DEMO_PRIOR_REFERENCE_FISCAL_YEAR,
       notes:
         "Preview 測試環境使用的真實部門識別（財務管理處），科目明細來源見各科目 sourceRef。2026 預算金額須由使用者於畫面親自輸入，非正式送審資料。",
     },
@@ -144,6 +147,7 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
         ${DEMO_DEPARTMENT_CLASS}::"DeptClass", ${item.commonCategory}::"AccountCommonCategory",
         'DEPARTMENT_INPUT'::"AccountEntryType", true, false,
         ${item.seq}, ${demoSourceRef(item.seq)}, ${item.priorYearReferenceAmount}::numeric,
+        ${DEMO_PRIOR_REFERENCE_FISCAL_YEAR},
         now(), now()
       )`
     )
@@ -155,6 +159,7 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
       "majorCategory", "commonCategory",
       "entryType", "isActive", "isProvisionalCode",
       "sourceSeq", "sourceRef", "priorYearReferenceAmount",
+      "priorYearReferenceFiscalYear",
       "createdAt", "updatedAt"
     )
     VALUES ${accountValueRows}
@@ -169,6 +174,7 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
       "isProvisionalCode" = false,
       "sourceRef" = EXCLUDED."sourceRef",
       "priorYearReferenceAmount" = EXCLUDED."priorYearReferenceAmount",
+      "priorYearReferenceFiscalYear" = EXCLUDED."priorYearReferenceFiscalYear",
       "updatedAt" = now()
     RETURNING "id", "code", "name", "sourceSeq", "priorYearReferenceAmount"
   `;

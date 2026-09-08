@@ -46,7 +46,10 @@ interface VersionDto {
   adjustmentReason: string | null;
   department: { name: string; code: string };
   lines: LineDto[];
-  priorYearHeadcount: number;
+  // null when this version's fiscal year has no confirmed prior-year
+  // reference (see Department.priorYearReferenceFiscalYear / createBudgetVersionDraft) -
+  // never a stale/mismatched-year figure.
+  priorYearHeadcount: number | null;
   budgetYearHeadcount: number;
   lastPreparedAt: string;
 }
@@ -126,16 +129,27 @@ export function BudgetVersionClient({
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
 
+  // Never hardcoded - every year label on this page is derived from this
+  // version's own fiscalYear, so preparing e.g. a 2028 budget automatically
+  // shows "2027推估"/"2028預算" without any code change (see spec §5:
+  // referenceYear = fiscalYear - 1, budgetYear = fiscalYear).
+  const referenceYear = version.fiscalYear - 1;
+  const budgetYear = version.fiscalYear;
+
   // Always recomputed fresh from the current line amounts - never a stored
-  // subtotal - so this stays live as the user edits each 2026 figure.
-  const summary2026 = useMemo(
+  // subtotal - so this stays live as the user edits each budgetYear figure.
+  const summaryBudgetYear = useMemo(
     () =>
       computeCategorySummary(
         lines.map((l) => ({ commonCategory: l.account.commonCategory, amount: l.nextYearTotal }))
       ),
     [lines]
   );
-  const summary2025Reference = useMemo(
+  // Only lines with a confirmed referenceYear reference (projectionIsComplete)
+  // contribute a real figure here - an unconfirmed line's priorYearOriginalBudget
+  // is always the 0 sentinel (see createBudgetVersionDraft), so summing it
+  // in unconditionally is safe and never fabricates a nonzero reference total.
+  const summaryReferenceYear = useMemo(
     () =>
       computeCategorySummary(
         lines.map((l) => ({ commonCategory: l.account.commonCategory, amount: l.priorYearOriginalBudget }))
@@ -290,19 +304,26 @@ export function BudgetVersionClient({
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {summary2026.rows.map((row) => (
+        {summaryBudgetYear.rows.map((row) => (
           <div key={row.category} className="rounded border border-slate-200 p-3">
-            <p className="text-xs text-slate-500">{row.label}（2026）</p>
+            <p className="text-xs text-slate-500">
+              {row.label}（{budgetYear}）
+            </p>
             <p className="text-sm font-semibold">{formatAmount(row.total.toString())}</p>
             <p className="text-xs text-slate-400">
-              2025 參考：{formatAmount(summary2025Reference.rows.find((r) => r.category === row.category)?.total.toString() ?? "0")}
+              {referenceYear}推估：
+              {formatAmount(summaryReferenceYear.rows.find((r) => r.category === row.category)?.total.toString() ?? "0")}
             </p>
           </div>
         ))}
         <div className="rounded border border-brand-600 bg-brand-50 p-3">
-          <p className="text-xs text-slate-500">管理費用合計（2026，即時計算）</p>
-          <p className="text-sm font-semibold">{formatAmount(summary2026.grandTotal.toString())}</p>
-          <p className="text-xs text-slate-400">2025 參考：{formatAmount(summary2025Reference.grandTotal.toString())}</p>
+          <p className="text-xs text-slate-500">
+            管理費用合計（{budgetYear}，即時計算）
+          </p>
+          <p className="text-sm font-semibold">{formatAmount(summaryBudgetYear.grandTotal.toString())}</p>
+          <p className="text-xs text-slate-400">
+            {referenceYear}推估：{formatAmount(summaryReferenceYear.grandTotal.toString())}
+          </p>
         </div>
       </div>
 
@@ -319,21 +340,29 @@ export function BudgetVersionClient({
               <th className="px-2 py-2" style={stickyCellStyle(STICKY_COL.item, { header: true, dividerRight: true })}>
                 項目
               </th>
-              <th className="px-2 py-2">2025推估金額（唯讀）</th>
-              <th className="px-2 py-2">2026預算金額</th>
-              <th className="px-2 py-2">目標(新員)</th>
-              <th className="px-2 py-2">合計(含新員)</th>
+              <th className="px-2 py-2">{referenceYear}年推估金額（唯讀）</th>
+              <th className="px-2 py-2">{budgetYear}年預算金額</th>
+              <th className="px-2 py-2">{budgetYear}年目標（新員）</th>
+              <th className="px-2 py-2">{budgetYear}年合計（含新員）</th>
               <th className="px-2 py-2">增減金額</th>
               <th className="px-2 py-2">增減率</th>
               <th className="px-2 py-2">說明／編列依據</th>
             </tr>
           </thead>
           <tbody>
-            <HeadcountRow headcount={headcount} editable={editable} busy={busy} onSave={saveHeadcount} />
+            <HeadcountRow
+              headcount={headcount}
+              referenceYear={referenceYear}
+              budgetYear={budgetYear}
+              editable={editable}
+              busy={busy}
+              onSave={saveHeadcount}
+            />
             {lines.map((line) => (
               <LineRow
                 key={line.id}
                 line={line}
+                referenceYear={referenceYear}
                 editable={editable}
                 busy={busy}
                 canSeeSalary={canSeeSalary}
@@ -423,18 +452,22 @@ const HEADCOUNT_ROW_BACKGROUND = "#eef2ff"; // indigo-50
  * Special first row of the budget line table: 部門人數 (department
  * headcount). Deliberately NOT a BudgetLine/Account - no 分類, 科目編號,
  * 目標(新員), 合計(含新員), 增減金額, 增減率, or 說明／編列依據 for this
- * row (see spec), and it is never included in summary2026/summary2025Reference
- * above (those are computed only from `lines`, which never contains this
- * row). Always rendered before the lines.map() below so it can never be
- * reordered by account sorting.
+ * row (see spec), and it is never included in summaryBudgetYear/
+ * summaryReferenceYear above (those are computed only from `lines`, which
+ * never contains this row). Always rendered before the lines.map() below so
+ * it can never be reordered by account sorting.
  */
 function HeadcountRow({
   headcount,
+  referenceYear,
+  budgetYear,
   editable,
   busy,
   onSave,
 }: {
-  headcount: { priorYearHeadcount: number; budgetYearHeadcount: number };
+  headcount: { priorYearHeadcount: number | null; budgetYearHeadcount: number };
+  referenceYear: number;
+  budgetYear: number;
   editable: boolean;
   busy: boolean;
   onSave: (budgetYearHeadcount: string) => Promise<{ budgetYearHeadcount: number } | null>;
@@ -461,10 +494,10 @@ function HeadcountRow({
       >
         部門人數
       </td>
-      <td className="px-2 py-1" title="2025 年參考人數，僅供參考，唯讀不可修改">
-        {headcount.priorYearHeadcount}
+      <td className="px-2 py-1" title={`${referenceYear}年推估人數，僅供參考，唯讀不可修改`}>
+        {headcount.priorYearHeadcount === null ? "—" : headcount.priorYearHeadcount}
       </td>
-      <td className="px-2 py-1">
+      <td className="px-2 py-1" title={`${budgetYear}年預算人數`}>
         {editable ? (
           <input
             type="text"
@@ -486,12 +519,14 @@ function HeadcountRow({
 
 function LineRow({
   line,
+  referenceYear,
   editable,
   busy,
   canSeeSalary,
   onSave,
 }: {
   line: LineDto;
+  referenceYear: number;
   editable: boolean;
   busy: boolean;
   canSeeSalary: boolean;
@@ -500,9 +535,9 @@ function LineRow({
   // A line that has never been saved by the user (createdAt === updatedAt,
   // set to the exact same instant when the draft was created - see
   // createBudgetVersionDraft) shows blank inputs rather than the stored "0"
-  // default, so the 2026 column never looks pre-filled. The moment the user
-  // saves anything (even an explicit 0), updatedAt moves past createdAt and
-  // the real stored value is shown from then on.
+  // default, so the budgetYear column never looks pre-filled. The moment the
+  // user saves anything (even an explicit 0), updatedAt moves past createdAt
+  // and the real stored value is shown from then on.
   const isUntouched = line.createdAt === line.updatedAt;
   const [excludingNew, setExcludingNew] = useState(isUntouched ? "" : formatAmountInputValue(line.nextYearTargetExcludingNew));
   const [newHire, setNewHire] = useState(isUntouched ? "" : formatAmountInputValue(line.nextYearNewHireBudget));
@@ -526,7 +561,11 @@ function LineRow({
     }
   }
 
-  const deltaAmount = Number(line.nextYearTotal) - Number(line.priorYearOriginalBudget);
+  // Only meaningful when the reference base is actually confirmed
+  // (projectionIsComplete) - priorYearOriginalBudget is the 0 sentinel
+  // otherwise (see createBudgetVersionDraft), so a naive subtraction would
+  // silently show "增減金額" as if the base were a real, known zero.
+  const deltaAmount = line.projectionIsComplete ? Number(line.nextYearTotal) - Number(line.priorYearOriginalBudget) : null;
 
   return (
     <tr className="border-t border-slate-200">
@@ -543,8 +582,8 @@ function LineRow({
       >
         {line.account.name}
       </td>
-      <td className="px-2 py-1" title="2025 推估金額，僅供參考，唯讀不可修改">
-        {line.projectionIsComplete ? formatAmount(line.priorYearOriginalBudget) : "資料不全，待確認"}
+      <td className="px-2 py-1" title={`${referenceYear}年推估金額，僅供參考，唯讀不可修改`}>
+        {line.projectionIsComplete ? formatAmount(line.priorYearOriginalBudget) : `尚無${referenceYear}年推估資料`}
       </td>
       <td className="px-2 py-1">
         {line.formulaStatus === "NOT_CONFIGURED" ? (
@@ -581,13 +620,16 @@ function LineRow({
         )}
       </td>
       <td className="px-2 py-1 font-medium">{formatAmount(line.nextYearTotal)}</td>
-      <td className={`px-2 py-1 ${deltaAmount < 0 ? "text-emerald-700" : deltaAmount > 0 ? "text-red-700" : ""}`}>
-        {Number.isFinite(deltaAmount) ? formatAmount(deltaAmount.toString()) : "-"}
+      <td
+        className={`px-2 py-1 ${deltaAmount !== null && deltaAmount < 0 ? "text-emerald-700" : deltaAmount !== null && deltaAmount > 0 ? "text-red-700" : ""}`}
+      >
+        {deltaAmount !== null && Number.isFinite(deltaAmount) ? formatAmount(deltaAmount.toString()) : "—"}
       </td>
       <td className="px-2 py-1">
-        {/* 增減率 = 增減金額(2026合計－2025推估) ÷ 2025推估金額；2025推估為 0 時無法計算，
-            growthRateIncludingNew 在後端已回傳 null（見 lib/money/decimal.ts#growthRate），此處顯示「－」。 */}
-        {line.growthRateIncludingNew ? `${(Number(line.growthRateIncludingNew) * 100).toFixed(2)}%` : "－"}
+        {/* 增減率 = 增減金額(budgetYear合計－referenceYear推估) ÷ referenceYear推估金額；
+            referenceYear推估不存在或為 0 時無法計算，growthRateIncludingNew 在後端已回傳
+            null（見 lib/money/decimal.ts#growthRate 與 createBudgetVersionDraft 的年度比對），此處顯示「—」。 */}
+        {line.growthRateIncludingNew ? `${(Number(line.growthRateIncludingNew) * 100).toFixed(2)}%` : "—"}
       </td>
       <td className="px-2 py-1">
         {canEditThisLine ? (
