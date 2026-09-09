@@ -2,13 +2,18 @@ import { describe, it, expect } from "vitest";
 import {
   buildDeptAgg,
   buildLineAgg,
+  buildReportingAccountAgg,
+  buildUnmappedAccountRows,
+  buildScopeCompleteness,
   lineIsTouched,
   versionHasBudgetInput,
   isSgaClass,
   isProductionClass,
   type DeptVersionDto,
   type DeptLineDto,
+  type DeptSummaryEntry,
 } from "@/lib/reports/multiDepartmentSummary";
+import { SGA_REPORTING_ACCOUNTS } from "@/lib/reports/reportingAccountMap";
 
 const T0 = "2026-01-01T00:00:00.000Z";
 const T1 = "2026-01-02T00:00:00.000Z";
@@ -39,6 +44,20 @@ function version(overrides: Partial<DeptVersionDto> = {}): DeptVersionDto {
     ...overrides,
   };
 }
+
+function entry(overrides: Partial<DeptSummaryEntry> = {}): DeptSummaryEntry {
+  return {
+    code: "17103",
+    name: "資訊處",
+    class: "M",
+    isTestData: true,
+    version: version(),
+    ...overrides,
+  };
+}
+
+// 薪資支出's real mapping row (M=6110010 / S=6210010 / R=6310010).
+const SALARY_MAPPING = SGA_REPORTING_ACCOUNTS.find((r) => r.sourceCodes.M === "6110010")!;
 
 describe("lineIsTouched / versionHasBudgetInput", () => {
   it("a line whose updatedAt equals createdAt has never been entered", () => {
@@ -152,5 +171,104 @@ describe("isSgaClass / isProductionClass", () => {
     expect(isProductionClass("S")).toBe(false);
     expect(isProductionClass("M")).toBe(false);
     expect(isProductionClass("R")).toBe(false);
+  });
+});
+
+describe("buildReportingAccountAgg - one pooled row per reportingAccountKey, never per department+account", () => {
+  it("merges M/S/R's three different Account.codes for the same reporting line into a single sum", () => {
+    const entries = [
+      entry({ code: "17103", name: "資訊處", class: "M", version: version({ lines: [line({ id: "m", account: { code: "6110010", name: "薪資支出", commonCategory: "PERSONNEL" }, priorYearOriginalBudget: "100" })] }) }),
+      entry({ code: "12111", name: "台北", class: "S", version: version({ lines: [line({ id: "s", account: { code: "6210010", name: "薪資支出", commonCategory: "PERSONNEL" }, priorYearOriginalBudget: "200" })] }) }),
+      entry({ code: "11122", name: "電源研發部", class: "R", version: version({ lines: [line({ id: "r", account: { code: "6310010", name: "薪資支出", commonCategory: "PERSONNEL" }, priorYearOriginalBudget: "300" })] }) }),
+    ];
+    const agg = buildReportingAccountAgg(entries, SALARY_MAPPING);
+    expect(agg.prior.toNumber()).toBe(600); // 100 + 200 + 300, one merged row
+  });
+
+  it("a department with no version contributes nothing (never treated as a real 0)", () => {
+    const entries = [entry({ version: null }), entry({ code: "12111", class: "S", version: version({ lines: [line({ priorYearOriginalBudget: "500" })] }) })];
+    const agg = buildReportingAccountAgg(entries, SALARY_MAPPING);
+    expect(agg.prior.toNumber()).toBe(500);
+  });
+
+  it("2027 stays null (—) until at least one pooled line has actually been touched", () => {
+    const entries = [entry(), entry({ code: "12111", class: "S" })];
+    const agg = buildReportingAccountAgg(entries, SALARY_MAPPING);
+    expect(agg.excludingNew).toBeNull();
+  });
+
+  it("a line for a different reportingAccountKey is never pooled in", () => {
+    const otherMapping = SGA_REPORTING_ACCOUNTS.find((r) => r.reportingAccountKey !== SALARY_MAPPING.reportingAccountKey)!;
+    const entries = [entry()]; // only has a 6110010 (薪資支出) line
+    const agg = buildReportingAccountAgg(entries, otherMapping);
+    expect(agg.prior.toNumber()).toBe(0);
+  });
+});
+
+describe("buildUnmappedAccountRows - 待確認科目 (no reportingAccountKey, never merged by name)", () => {
+  it("an account code absent from reportingAccountMap.ts is listed, not silently merged into the 薪資支出 row it shares a name with", () => {
+    const entries = [
+      entry({
+        code: "17203",
+        name: "財務管理處",
+        version: version({ lines: [line({ account: { code: "3", name: "薪資支出", commonCategory: "PERSONNEL" }, priorYearOriginalBudget: "999" })] }),
+      }),
+    ];
+    const rows = buildUnmappedAccountRows(entries);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ departmentCode: "17203", accountCode: "3", accountName: "薪資支出" });
+
+    const salaryAgg = buildReportingAccountAgg(entries, SALARY_MAPPING);
+    expect(salaryAgg.prior.toNumber()).toBe(0); // the unmapped "3" line must not leak into the real 薪資支出 aggregate
+  });
+
+  it("a mapped account code never appears in the unmapped list", () => {
+    const entries = [entry()]; // 6110010, a real mapped code
+    expect(buildUnmappedAccountRows(entries)).toHaveLength(0);
+  });
+
+  it("a department with no version contributes no unmapped rows", () => {
+    expect(buildUnmappedAccountRows([entry({ version: null })])).toHaveLength(0);
+  });
+});
+
+describe("buildScopeCompleteness - table-level 應編/已建立草稿/已輸入/已送出/尚未編製 counts", () => {
+  it("counts every bucket correctly across a mix of statuses", () => {
+    const entries = [
+      entry({ code: "a", version: version({ status: "DRAFT", lastPreparedAt: T0, createdAt: T0 }) }), // drafted, no input
+      entry({ code: "b", version: version({ status: "DRAFT", lastPreparedAt: T1, createdAt: T0 }) }), // drafted, has input
+      entry({ code: "c", version: version({ status: "SUBMITTED", lastPreparedAt: T1, createdAt: T0 }) }), // submitted
+      entry({ code: "d", version: null }), // not prepared at all
+    ];
+    const stats = buildScopeCompleteness(entries);
+    expect(stats.expectedDepartmentCount).toBe(4);
+    expect(stats.draftDepartmentCount).toBe(3);
+    expect(stats.inputDepartmentCount).toBe(2); // b and c
+    expect(stats.submittedDepartmentCount).toBe(1); // c
+    expect(stats.notPreparedDepartmentCount).toBe(1);
+    expect(stats.notPreparedDepartmentNames).toEqual(["資訊處"]); // entry()'s default name, for the "d" entry
+  });
+
+  it("lastUpdatedAt is the most recent lastPreparedAt among departments that have a version, or null if none do", () => {
+    const withVersions = buildScopeCompleteness([
+      entry({ version: version({ lastPreparedAt: T0 }) }),
+      entry({ version: version({ lastPreparedAt: T1 }) }),
+    ]);
+    expect(withVersions.lastUpdatedAt).toBe(T1);
+
+    const noneYet = buildScopeCompleteness([entry({ version: null })]);
+    expect(noneYet.lastUpdatedAt).toBeNull();
+  });
+
+  it("an empty scope (no departments at all) reports all-zero counts, not an error", () => {
+    const stats = buildScopeCompleteness([]);
+    expect(stats).toMatchObject({
+      expectedDepartmentCount: 0,
+      draftDepartmentCount: 0,
+      inputDepartmentCount: 0,
+      submittedDepartmentCount: 0,
+      notPreparedDepartmentCount: 0,
+      lastUpdatedAt: null,
+    });
   });
 });

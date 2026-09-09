@@ -1,5 +1,6 @@
 import { Decimal, sumDecimals, growthRate } from "@/lib/money/decimal";
 import type { AccountCommonCategory, BudgetStatus, DeptClass } from "@prisma/client";
+import { isMappedAccountCode, type ReportingAccountMapping } from "@/lib/reports/reportingAccountMap";
 
 /**
  * Framework-free, multi-department extension of the budget summary preview
@@ -150,4 +151,93 @@ export function isSgaClass(deptClass: DeptClass): boolean {
 /** Production scope (生產): production departments only. */
 export function isProductionClass(deptClass: DeptClass): boolean {
   return deptClass === "P";
+}
+
+/**
+ * Pools every line across `entries` (already filtered to the correct
+ * departments/scope by the caller - e.g. isSgaClass) whose account.code
+ * matches ANY of `mapping.sourceCodes` (M/S/R for a 管銷研 row, P for a
+ * 生產 row) - i.e. one row per reportingAccountKey, never per
+ * department+account (see reportingAccountMap.ts for why a static code
+ * mapping is used instead of grouping by Account.code or Account.name at
+ * query time). Reuses buildLineAgg's null-until-touched semantics for
+ * 2027, so a reportingAccountKey with a real 2026 sum but no 2027 input
+ * yet still shows "—" rather than a fabricated 0.
+ */
+export function buildReportingAccountAgg(entries: DeptSummaryEntry[], mapping: ReportingAccountMapping): LineAgg {
+  const codes = new Set(Object.values(mapping.sourceCodes));
+  const lines = entries.flatMap((e) => (e.version ? e.version.lines.filter((l) => codes.has(l.account.code)) : []));
+  return buildLineAgg(lines);
+}
+
+export interface UnmappedAccountRow {
+  departmentCode: string;
+  departmentName: string;
+  accountCode: string;
+  accountName: string;
+  line: DeptLineDto;
+}
+
+/**
+ * Every BudgetLine across `entries` whose Account.code has no entry in
+ * either reporting-account table (see reportingAccountMap.ts) - e.g.
+ * 財務管理處's own manually-created demo account (code "3"). Listed
+ * per-department, never merged with anything else (not even with another
+ * unmapped line that happens to share a name), so a preparer/reviewer can
+ * see exactly what still needs a real reportingAccountKey assigned instead
+ * of it silently vanishing from - or being guessed into - the summary.
+ */
+export function buildUnmappedAccountRows(entries: DeptSummaryEntry[]): UnmappedAccountRow[] {
+  const rows: UnmappedAccountRow[] = [];
+  for (const e of entries) {
+    if (!e.version) continue;
+    for (const line of e.version.lines) {
+      if (!isMappedAccountCode(line.account.code)) {
+        rows.push({ departmentCode: e.code, departmentName: e.name, accountCode: line.account.code, accountName: line.account.name, line });
+      }
+    }
+  }
+  return rows;
+}
+
+export interface ScopeCompleteness {
+  expectedDepartmentCount: number;
+  draftDepartmentCount: number;
+  inputDepartmentCount: number;
+  submittedDepartmentCount: number;
+  notPreparedDepartmentCount: number;
+  notPreparedDepartmentNames: string[];
+  /** Most recent lastPreparedAt across every department that already has a version - null when none has one yet. */
+  lastUpdatedAt: string | null;
+}
+
+/**
+ * Completeness summary for one whole scope's table (管銷研 or 生產) - shown
+ * once above the table (應編部門數／已建立草稿部門數／已輸入部門數／已送出
+ * 部門數／尚未編製部門數／資料更新時間), never repeated per row: row-level
+ * coverage is identical for every reportingAccountKey in the same scope,
+ * since a department's version, once created, always carries every account
+ * applicable to its class (see stage2aSeed.ts) - so "which departments are
+ * missing" is a property of the whole table, not of any one account row.
+ *
+ * "已送出部門數" = any status other than DRAFT (this version has been sent
+ * to Finance at least once, even if later RETURNED for correction).
+ */
+export function buildScopeCompleteness(scopeEntries: DeptSummaryEntry[]): ScopeCompleteness {
+  const withVersion = scopeEntries.filter((e): e is DeptSummaryEntry & { version: DeptVersionDto } => Boolean(e.version));
+  const notPrepared = scopeEntries.filter((e) => !e.version);
+  const lastUpdatedAt = withVersion.reduce<string | null>((latest, e) => {
+    if (!latest || e.version.lastPreparedAt > latest) return e.version.lastPreparedAt;
+    return latest;
+  }, null);
+
+  return {
+    expectedDepartmentCount: scopeEntries.length,
+    draftDepartmentCount: withVersion.length,
+    inputDepartmentCount: withVersion.filter((e) => versionHasBudgetInput(e.version)).length,
+    submittedDepartmentCount: withVersion.filter((e) => e.version.status !== "DRAFT").length,
+    notPreparedDepartmentCount: notPrepared.length,
+    notPreparedDepartmentNames: notPrepared.map((e) => e.name),
+    lastUpdatedAt,
+  };
 }

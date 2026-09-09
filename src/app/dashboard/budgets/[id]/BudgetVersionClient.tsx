@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ClientApiError } from "@/lib/client/api";
+import { createPendingSaveTracker } from "@/lib/client/pendingSave";
 import { computeCategorySummary, CATEGORY_LABELS } from "@/lib/budget/categorySummary";
 import { formatTaipeiDate } from "@/lib/format/date";
 import type { Role, AccountCommonCategory } from "@prisma/client";
@@ -104,6 +105,32 @@ const STICKY_COL = {
   item: { width: 176, left: 168 },
 } as const;
 
+/**
+ * "← 回到預算總覽" - rendered identically at both required positions (see
+ * BudgetVersionClient's own two usages) so the label, behavior, and styling
+ * never drift apart. Deliberately styled as a secondary action (plain
+ * border, slate text) - visibly less prominent than the primary
+ * 送出申請／開始覆核 buttons (bg-brand-600, white text) - per spec. Shown
+ * for every role and every version status; `busy` reflects only this
+ * button's OWN in-flight click (backNavBusy), never the shared per-field
+ * `busy` state - gating this on that shared flag would let a blur-triggered
+ * save (fired by the browser's own focus-out just before this button's
+ * click event is dispatched) disable the button between mousedown and
+ * click, silently swallowing the very click meant to trigger the flush.
+ */
+function BackToDashboardButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={onClick}
+      className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+    >
+      {busy ? "儲存中…" : "← 回到預算總覽"}
+    </button>
+  );
+}
+
 export function BudgetVersionClient({
   currentUser,
   version,
@@ -125,6 +152,12 @@ export function BudgetVersionClient({
   const [reasonPrompt, setReasonPrompt] = useState<null | "return" | "reject" | "adjustment">(null);
   const [reasonText, setReasonText] = useState("");
   const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
+  const [backNavBusy, setBackNavBusy] = useState(false);
+
+  // See lib/client/pendingSave.ts for what this tracks and why - one
+  // instance for this page's whole lifetime, registered into by both
+  // saveLine and saveHeadcount below, awaited by handleBackToDashboard.
+  const pendingSave = useRef(createPendingSaveTracker()).current;
 
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
@@ -157,7 +190,15 @@ export function BudgetVersionClient({
     [lines]
   );
 
-  async function saveLine(
+  function saveLine(line: LineDto, excludingNew: string, newHire: string, justification: string): Promise<LineDto | null> {
+    const promise = performSaveLine(line, excludingNew, newHire, justification);
+    // Registered synchronously (before performSaveLine's first internal
+    // `await` yields control) - see pendingSave's own comment.
+    pendingSave.register(promise.then((result) => result !== null));
+    return promise;
+  }
+
+  async function performSaveLine(
     line: LineDto,
     excludingNew: string,
     newHire: string,
@@ -184,7 +225,13 @@ export function BudgetVersionClient({
     }
   }
 
-  async function saveHeadcount(budgetYearHeadcount: string): Promise<{ budgetYearHeadcount: number } | null> {
+  function saveHeadcount(budgetYearHeadcount: string): Promise<{ budgetYearHeadcount: number } | null> {
+    const promise = performSaveHeadcount(budgetYearHeadcount);
+    pendingSave.register(promise.then((result) => result !== null));
+    return promise;
+  }
+
+  async function performSaveHeadcount(budgetYearHeadcount: string): Promise<{ budgetYearHeadcount: number } | null> {
     setBusy(true);
     setError(null);
     try {
@@ -201,6 +248,36 @@ export function BudgetVersionClient({
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * Shared handler for both "← 回到預算總覽" buttons (top and bottom - see
+   * spec: both must behave identically). Never uses history.back() (a link
+   * opened directly from outside would land on an arbitrary "back" page) -
+   * always a fixed router.push("/dashboard").
+   *
+   * Blurring the currently-focused element first flushes any edit the user
+   * made but never tabbed/clicked away from - in practice the browser has
+   * usually already done this by the time a click on this button is even
+   * dispatched (moving focus to the button blurs whatever had it first), but
+   * calling it explicitly here makes that guaranteed rather than incidental,
+   * and it is a no-op when nothing relevant is focused. Either way, by the
+   * time blur() returns, saveLine/saveHeadcount (if one was triggered) has
+   * already registered its promise with pendingSave synchronously, so
+   * awaiting it here always waits for the actual save - never a fixed
+   * guess-and-hope delay - before deciding whether it is safe to navigate.
+   */
+  async function handleBackToDashboard() {
+    setBackNavBusy(true);
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+    const saved = await pendingSave.wait();
+    if (!saved) {
+      setError("資料尚未儲存，請稍後再試");
+      setBackNavBusy(false);
+      return;
+    }
+    router.push("/dashboard");
   }
 
   async function handleWithdraw() {
@@ -256,6 +333,9 @@ export function BudgetVersionClient({
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
+      <div className="mb-2">
+        <BackToDashboardButton busy={backNavBusy} onClick={handleBackToDashboard} />
+      </div>
       <h1 className="mb-1 text-xl font-bold">
         {version.department.name} — {version.fiscalYear} 年度預算（v{version.versionNumber}）
       </h1>
@@ -373,7 +453,8 @@ export function BudgetVersionClient({
         </table>
       </div>
 
-      <div className="mt-6 flex gap-2">
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        <BackToDashboardButton busy={backNavBusy} onClick={handleBackToDashboard} />
         {availableActions.map((action) =>
           action === "return" || action === "reject" || action === "adjustment" ? (
             <button
