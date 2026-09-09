@@ -13,7 +13,7 @@ import { STAGE2A_ACCOUNTS } from "@/lib/testdata/stage2aAccounts";
 import { testBypassUser, TEST_BYPASS_USER_ID } from "@/lib/auth/testBypass";
 import { ApiError } from "@/lib/rbac/guard";
 import { updateDepartmentInputLine, createBudgetVersionDraft } from "@/lib/budget/lineService";
-import { submitBudgetVersion } from "@/lib/workflow/actions";
+import { submitBudgetVersion, withdrawBudgetSubmission } from "@/lib/workflow/actions";
 import { grantDepartmentScope } from "./helpers/factory";
 
 const ORIGINAL_VERCEL_ENV = process.env.VERCEL_ENV;
@@ -372,7 +372,11 @@ describe("Stage 2A - salary/bonus accounts are editable, not locked behind 尚�
     }
   });
 
-  it("NOT_BUDGETED accounts are left alone (still locked at 0) - only FORMULA is overridden", async () => {
+  it("NOT_BUDGETED accounts are ALSO overridden to editable DEPARTMENT_INPUT - not left locked at a fixed 0 like a real department's would be", async () => {
+    // e.g. 6210080 績效獎金 / 6217020 人事廣告費 - accounts a real
+    // department would never let anyone edit (固定為0，不編列), but Stage 2A
+    // test departments exist purely for manual-entry practice on every
+    // cost, so NOT_BUDGETED must not silently stay locked here either.
     const notBudgetedCodes = new Set(STAGE2A_ACCOUNTS.filter((a) => a.entryType === "NOT_BUDGETED").map((a) => a.code));
     expect(notBudgetedCodes.size).toBeGreaterThan(0);
 
@@ -385,8 +389,9 @@ describe("Stage 2A - salary/bonus accounts are editable, not locked behind 尚�
     const notBudgetedLines = lines.filter((l) => notBudgetedCodes.has(l.account.code));
     expect(notBudgetedLines.length).toBeGreaterThan(0);
     for (const line of notBudgetedLines) {
-      expect(line.entryTypeSnapshot).toBe("NOT_BUDGETED");
-      expect(line.isLocked).toBe(true);
+      expect(line.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+      expect(line.formulaStatus).toBe("NOT_APPLICABLE");
+      expect(line.isLocked).toBe(false);
     }
   });
 
@@ -880,5 +885,226 @@ describe("Stage 2A - upgrading an environment seeded before the entryTypeSnapsho
       expect((err as ApiError).message).toContain("16124");
       expect((err as ApiError).message).toContain("尚未設定");
     }
+  });
+});
+
+describe("Stage 2A - every entryType (not just FORMULA) becomes a fully editable snapshot", () => {
+  beforeEach(() => setEnv("preview", "true"));
+
+  it("after a fresh seed, all 8 departments' DRAFT versions have zero non-editable lines - totalBudgetLines === editableBudgetLines for every department", async () => {
+    const result = await runStage2ATestSeed(testBypassUser());
+    expect(result.nonEditableBudgetLines).toBe(0);
+    expect(result.remainingLockedLines).toBe(0);
+    expect(result.remainingFormulaLines).toBe(0);
+    expect(result.remainingCentralInputLines).toBe(0);
+    expect(result.remainingNotApplicableLines).toBe(0);
+    expect(result.remainingUnconfiguredFormulaLines).toBe(0);
+    expect(result.totalBudgetLines).toBe(result.editableBudgetLines);
+    expect(result.totalBudgetLines).toBeGreaterThan(0);
+
+    expect(result.departments).toHaveLength(8);
+    for (const d of result.departments) {
+      expect(d.totalBudgetLines).toBeGreaterThan(0);
+      expect(d.editableBudgetLines).toBe(d.totalBudgetLines); // 明細數 === 可輸入數 for every department
+    }
+  });
+
+  it("a human can type into a formerly-NOT_BUDGETED account (e.g. 6210080 績效獎金) and it persists, exactly like the formerly-FORMULA case", async () => {
+    const admin = await createUser({ role: "SYSTEM_ADMIN", companyWide: true });
+    const owner = await createUser({ role: "BUDGET_OWNER" });
+    await runStage2ATestSeed(toCurrentUser(admin));
+
+    const dept = await prisma.department.findUniqueOrThrow({ where: { code: "12111" } }); // 台北 (S class)
+    await grantDepartmentScope(owner.id, dept.id);
+    const version = await prisma.budgetVersion.findFirstOrThrow({ where: { departmentId: dept.id, fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR } });
+    const notBudgetedAccount = await prisma.account.findUniqueOrThrow({ where: { code: "6210080" } }); // 績效獎金, NOT_BUDGETED in the shared master
+    expect(notBudgetedAccount.entryType).toBe("NOT_BUDGETED"); // sanity: shared master data unaffected
+    const line = await prisma.budgetLine.findUniqueOrThrow({
+      where: { budgetVersionId_accountId: { budgetVersionId: version.id, accountId: notBudgetedAccount.id } },
+    });
+    expect(line.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+    expect(line.isLocked).toBe(false);
+
+    const updated = await updateDepartmentInputLine(toCurrentUser(owner), version.id, line.id, {
+      nextYearTargetExcludingNew: "50000",
+      nextYearNewHireBudget: "0",
+    });
+    expect(updated.nextYearTargetExcludingNew.toString()).toBe("50000");
+
+    const reread = await prisma.budgetLine.findUniqueOrThrow({ where: { id: line.id } });
+    expect(reread.nextYearTargetExcludingNew.toString()).toBe("50000");
+  });
+
+  it("legacy upgrade: an existing NOT_BUDGETED/isLocked line with real 2027 data is unlocked without discarding that data", async () => {
+    const deptId = "stage2a-dept-12111";
+    const accountId = "stage2a-acct-6210080";
+    const versionId = "stage2a-ver-12111-2027";
+    const lineId = "stage2a-line-12111-6210080";
+    const untouchedTimestamp = new Date("2026-01-01T00:00:00.000Z");
+    const enteredTimestamp = new Date("2026-02-01T00:00:00.000Z");
+
+    await prisma.department.create({
+      data: {
+        id: deptId,
+        code: "12111",
+        name: "台北",
+        class: "S",
+        isActive: true,
+        isTestData: true,
+        priorYearHeadcount: 8,
+        priorYearReferenceFiscalYear: STAGE2A_PROJECTION_FISCAL_YEAR,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.account.create({
+      data: {
+        id: accountId,
+        code: "6210080",
+        name: "績效獎金",
+        majorCategory: "S",
+        commonCategory: "PERSONNEL",
+        entryType: "NOT_BUDGETED",
+        isActive: true,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.budgetVersion.create({
+      data: {
+        id: versionId,
+        departmentId: deptId,
+        fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR,
+        versionNumber: 1,
+        status: "DRAFT",
+        isTestData: true,
+        priorYearHeadcount: 8,
+        budgetYearHeadcount: 8,
+        lastPreparedAt: enteredTimestamp,
+        createdAt: untouchedTimestamp,
+        updatedAt: enteredTimestamp,
+      },
+    });
+    // Old (pre-fix) locked NOT_BUDGETED line - but, adversarially, already
+    // carrying real 2027 data (however it got there) - the upgrade must
+    // preserve it exactly regardless.
+    await prisma.budgetLine.create({
+      data: {
+        id: lineId,
+        budgetVersionId: versionId,
+        accountId,
+        priorPriorYearActual: 0,
+        priorYearOriginalBudget: 0,
+        currentYearProjection: 0,
+        projectionIsComplete: true,
+        nextYearTargetExcludingNew: 88000,
+        nextYearNewHireBudget: 5000,
+        nextYearTotal: 93000,
+        entryTypeSnapshot: "NOT_BUDGETED",
+        formulaStatus: "NOT_APPLICABLE",
+        isLocked: true,
+        justification: "既有真實編列說明",
+        createdAt: untouchedTimestamp,
+        updatedAt: enteredTimestamp,
+      },
+    });
+
+    const result = await runStage2ATestSeed(testBypassUser());
+    expect(result.remainingNotApplicableLines).toBe(0);
+
+    const line = await prisma.budgetLine.findUniqueOrThrow({ where: { id: lineId } });
+    expect(line.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+    expect(line.formulaStatus).toBe("NOT_APPLICABLE");
+    expect(line.isLocked).toBe(false);
+    expect(line.nextYearTargetExcludingNew.toString()).toBe("88000");
+    expect(line.nextYearNewHireBudget.toString()).toBe("5000");
+    expect(line.justification).toBe("既有真實編列說明");
+    expect(line.updatedAt.getTime()).toBe(enteredTimestamp.getTime()); // not re-bumped by the raw SQL fix
+  });
+
+  it("a SUBMITTED version's lines are unlocked in the database by the seed, but stay read-only in the UI until withdrawn to DRAFT - then become genuinely editable", async () => {
+    const admin = await createUser({ role: "SYSTEM_ADMIN", companyWide: true });
+    const owner = await createUser({ role: "BUDGET_OWNER" });
+    await runStage2ATestSeed(toCurrentUser(admin));
+
+    const dept = await prisma.department.findUniqueOrThrow({ where: { code: "17303" } }); // 行政管理處
+    await grantDepartmentScope(owner.id, dept.id);
+    const version = await prisma.budgetVersion.findFirstOrThrow({ where: { departmentId: dept.id, fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR } });
+
+    const submitted = await submitBudgetVersion(toCurrentUser(owner), version.id);
+    expect(submitted.status).toBe("SUBMITTED");
+
+    // Re-running the seed while this version is SUBMITTED must not revert
+    // its status, and every line's isLocked is already false (from the
+    // original seed) - nothing left to "fix" here, but the run must still
+    // succeed and never touch BudgetVersion.status.
+    await runStage2ATestSeed(testBypassUser());
+    const stillSubmitted = await prisma.budgetVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(stillSubmitted.status).toBe("SUBMITTED");
+
+    // 行政管理處 is M-class; find one of its lines whose shared Account is
+    // NOT_BUDGETED (rather than hardcoding a specific code, which varies by
+    // class) to exercise exactly the category this round's fix broadened.
+    const lineBeforeWithdraw = await prisma.budgetLine.findFirstOrThrow({
+      where: { budgetVersionId: version.id, account: { entryType: "NOT_BUDGETED" } },
+      include: { account: true },
+    });
+    expect(lineBeforeWithdraw.isLocked).toBe(false); // already unlocked in the DB by the seed
+    await expect(
+      updateDepartmentInputLine(toCurrentUser(owner), version.id, lineBeforeWithdraw.id, {
+        nextYearTargetExcludingNew: "1",
+        nextYearNewHireBudget: "0",
+      })
+    ).rejects.toThrow(ApiError); // still read-only while SUBMITTED, regardless of isLocked
+
+    await withdrawBudgetSubmission(toCurrentUser(owner), version.id);
+    const withdrawn = await prisma.budgetVersion.findUniqueOrThrow({ where: { id: version.id } });
+    expect(withdrawn.status).toBe("DRAFT");
+
+    const line = await prisma.budgetLine.findUniqueOrThrow({ where: { id: lineBeforeWithdraw.id } });
+    const updated = await updateDepartmentInputLine(toCurrentUser(owner), version.id, line.id, {
+      nextYearTargetExcludingNew: "1",
+      nextYearNewHireBudget: "0",
+    });
+    expect(updated.nextYearTargetExcludingNew.toString()).toBe("1");
+  });
+
+  it("re-running the seed after everything is already fixed reports zero remaining problems of every kind (idempotent)", async () => {
+    await runStage2ATestSeed(testBypassUser());
+    const second = await runStage2ATestSeed(testBypassUser());
+    expect(second.nonEditableBudgetLines).toBe(0);
+    expect(second.remainingLockedLines).toBe(0);
+    expect(second.remainingFormulaLines).toBe(0);
+    expect(second.remainingNotApplicableLines).toBe(0);
+    expect(second.remainingUnconfiguredFormulaLines).toBe(0);
+    expect(second.budgetLinesUnlocked).toBe(0); // nothing left to unlock on the second run
+  });
+
+  it("does not modify how a REAL department's own createBudgetVersionDraft handles a shared NOT_BUDGETED account - it stays fixed at 0, genuinely locked", async () => {
+    await runStage2ATestSeed(testBypassUser()); // seeds the shared S-class accounts, including NOT_BUDGETED ones like 6210080
+
+    const realDept = await createDepartment({ code: "REALS01", name: "真實營業部門", class: "S" });
+    const owner = await createUser({ role: "BUDGET_OWNER" });
+    await grantDepartmentScope(owner.id, realDept.id);
+
+    const version = await createBudgetVersionDraft(toCurrentUser(owner), realDept.id, STAGE2A_BUDGET_FISCAL_YEAR);
+    const notBudgetedAccount = await prisma.account.findUniqueOrThrow({ where: { code: "6210080" } });
+    const line = await prisma.budgetLine.findUniqueOrThrow({
+      where: { budgetVersionId_accountId: { budgetVersionId: version.id, accountId: notBudgetedAccount.id } },
+    });
+
+    // Real production behavior is unchanged: a genuinely NOT_BUDGETED
+    // account stays locked at 0 for a real department - the Stage 2A
+    // override never touches this path.
+    expect(line.entryTypeSnapshot).toBe("NOT_BUDGETED");
+    expect(line.isLocked).toBe(true);
+    expect(Number(line.nextYearTargetExcludingNew)).toBe(0);
+
+    await expect(
+      updateDepartmentInputLine(toCurrentUser(owner), version.id, line.id, {
+        nextYearTargetExcludingNew: "1",
+        nextYearNewHireBudget: "0",
+      })
+    ).rejects.toThrow(ApiError);
   });
 });

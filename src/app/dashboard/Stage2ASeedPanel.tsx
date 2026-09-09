@@ -12,6 +12,8 @@ interface DepartmentSummary {
   headcount2026: number;
   accountCount: number;
   totalProjection2026: string;
+  totalBudgetLines: number;
+  editableBudgetLines: number;
 }
 
 interface SeedResult {
@@ -21,7 +23,13 @@ interface SeedResult {
   budgetLinesCreated: number;
   budgetLinesInspected: number;
   budgetLinesUnlocked: number;
+  totalBudgetLines: number;
+  editableBudgetLines: number;
+  nonEditableBudgetLines: number;
   remainingLockedLines: number;
+  remainingFormulaLines: number;
+  remainingCentralInputLines: number;
+  remainingNotApplicableLines: number;
   remainingUnconfiguredFormulaLines: number;
   departments: DepartmentSummary[];
 }
@@ -51,7 +59,13 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
   const [lastRunDiagnostics, setLastRunDiagnostics] = useState<{
     budgetLinesInspected: number;
     budgetLinesUnlocked: number;
+    totalBudgetLines: number;
+    editableBudgetLines: number;
+    nonEditableBudgetLines: number;
     remainingLockedLines: number;
+    remainingFormulaLines: number;
+    remainingCentralInputLines: number;
+    remainingNotApplicableLines: number;
     remainingUnconfiguredFormulaLines: number;
   } | null>(null);
 
@@ -68,7 +82,13 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
       setLastRunDiagnostics({
         budgetLinesInspected: res.result.budgetLinesInspected,
         budgetLinesUnlocked: res.result.budgetLinesUnlocked,
+        totalBudgetLines: res.result.totalBudgetLines,
+        editableBudgetLines: res.result.editableBudgetLines,
+        nonEditableBudgetLines: res.result.nonEditableBudgetLines,
         remainingLockedLines: res.result.remainingLockedLines,
+        remainingFormulaLines: res.result.remainingFormulaLines,
+        remainingCentralInputLines: res.result.remainingCentralInputLines,
+        remainingNotApplicableLines: res.result.remainingNotApplicableLines,
         remainingUnconfiguredFormulaLines: res.result.remainingUnconfiguredFormulaLines,
       });
       router.refresh();
@@ -120,11 +140,20 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
       {lastRunDiagnostics && (
-        <p className="mt-2 text-xs text-sky-800">
-          本次檢查 {lastRunDiagnostics.budgetLinesInspected} 筆科目，解鎖 {lastRunDiagnostics.budgetLinesUnlocked} 筆舊版鎖定科目；
-          剩餘鎖定科目 {lastRunDiagnostics.remainingLockedLines} 筆、公式尚未設定科目 {lastRunDiagnostics.remainingUnconfiguredFormulaLines}{" "}
-          筆（皆應為 0）。
-        </p>
+        <div className="mt-2 text-xs text-sky-800">
+          <p>
+            本次檢查 {lastRunDiagnostics.budgetLinesInspected} 筆科目，解鎖 {lastRunDiagnostics.budgetLinesUnlocked} 筆舊版鎖定科目。
+          </p>
+          <p>
+            DRAFT／RETURNED 版本明細共 {lastRunDiagnostics.totalBudgetLines} 筆，可輸入 {lastRunDiagnostics.editableBudgetLines} 筆、
+            不可輸入 {lastRunDiagnostics.nonEditableBudgetLines} 筆（應為 0）。
+          </p>
+          <p>
+            剩餘鎖定明細：公式 {lastRunDiagnostics.remainingFormulaLines} 筆、CENTRAL_INPUT {lastRunDiagnostics.remainingCentralInputLines}{" "}
+            筆、不編列 {lastRunDiagnostics.remainingNotApplicableLines} 筆、公式尚未設定 {lastRunDiagnostics.remainingUnconfiguredFormulaLines}{" "}
+            筆（皆應為 0）。
+          </p>
+        </div>
       )}
 
       {departments && (
@@ -140,6 +169,8 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
                 <th className="pr-3">2026推估人數</th>
                 <th className="pr-3">科目數</th>
                 <th className="pr-3">2026推估總額</th>
+                <th className="pr-3">明細數</th>
+                <th className="pr-3">可輸入數</th>
               </tr>
             </thead>
             <tbody>
@@ -152,6 +183,10 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
                   <td className="py-1 pr-3">{d.headcount2026}</td>
                   <td className="py-1 pr-3">{d.accountCount}</td>
                   <td className="py-1 pr-3">{formatAmount(d.totalProjection2026)}</td>
+                  <td className="py-1 pr-3">{d.totalBudgetLines}</td>
+                  <td className={`py-1 pr-3 ${d.totalBudgetLines > 0 && d.editableBudgetLines !== d.totalBudgetLines ? "font-semibold text-red-600" : ""}`}>
+                    {d.editableBudgetLines}
+                  </td>
                 </tr>
               ))}
             </tbody>

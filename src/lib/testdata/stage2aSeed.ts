@@ -17,6 +17,20 @@ function assertBypassEnabled(): void {
   }
 }
 
+/**
+ * Mirrors BudgetVersionClient.tsx's LineRow rendering EXACTLY: it checks
+ * `formulaStatus === "NOT_CONFIGURED"` first (always renders "尚未設定",
+ * regardless of isLocked) and only falls through to `canEditThisLine =
+ * editable && !line.isLocked` afterward - so a line renders as an input
+ * only when NEITHER condition blocks it. Used everywhere this module needs
+ * to know "would the budget page actually show an input for this line" -
+ * checking isLocked alone would miss a line that is technically unlocked
+ * but still carries a stale formulaStatus=NOT_CONFIGURED.
+ */
+function isLineEditable(line: { isLocked: boolean; formulaStatus: string }): boolean {
+  return !line.isLocked && line.formulaStatus !== "NOT_CONFIGURED";
+}
+
 export const STAGE2A_PROJECTION_FISCAL_YEAR = 2026;
 export const STAGE2A_BUDGET_FISCAL_YEAR = 2027;
 
@@ -45,6 +59,20 @@ export interface Stage2aDepartmentSummary {
   headcount2026: number;
   accountCount: number;
   totalProjection2026: string;
+  /** Only counted for this department's DRAFT/RETURNED version (0/0 if it has none, e.g. already SUBMITTED) - see the "must be editable" scope in runStage2ATestSeed. */
+  totalBudgetLines: number;
+  editableBudgetLines: number;
+}
+
+export interface Stage2aNonEditableLineDetail {
+  departmentCode: string;
+  accountCode: string;
+  accountName: string;
+  entryTypeSnapshot: string;
+  formulaStatus: string;
+  isLocked: boolean;
+  versionStatus: string;
+  reason: string;
 }
 
 export interface Stage2aSeedResult {
@@ -58,8 +86,18 @@ export interface Stage2aSeedResult {
   budgetLinesCreated: number;
   budgetLinesInspected: number;
   budgetLinesUnlocked: number;
+  /** Scoped to DRAFT/RETURNED Stage 2A versions only - see runStage2ATestSeed's own comment for why SUBMITTED/UNDER_REVIEW/APPROVED versions are excluded from this specific count. */
+  totalBudgetLines: number;
+  editableBudgetLines: number;
+  nonEditableBudgetLines: number;
   remainingLockedLines: number;
+  remainingFormulaLines: number;
+  /** Always 0 - this schema's AccountEntryType enum has no CENTRAL_INPUT value (see the field's own comment at its computation site). Kept for API-shape stability. */
+  remainingCentralInputLines: number;
+  /** Counts entryTypeSnapshot=NOT_BUDGETED lines still locked - the other real locking entryType besides FORMULA in this schema. */
+  remainingNotApplicableLines: number;
   remainingUnconfiguredFormulaLines: number;
+  nonEditableDetails: Stage2aNonEditableLineDetail[];
   departments: Stage2aDepartmentSummary[];
 }
 
@@ -208,29 +246,32 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
       });
       deptTotal += amount;
 
-      // Stage 2A's whole purpose is letting a human type in every 2027
-      // figure by hand - a FORMULA account with no FormulaDefinition/
-      // SalaryDataSource ever seeded for these test accounts (see this
-      // module's doc comment) would otherwise resolve NOT_CONFIGURED and
-      // permanently lock the field behind "尚未設定", exactly like
-      // createBudgetVersionDraft's own `if (!account.formulaKey)` branch -
-      // which is correct for a REAL department (a locked field genuinely
-      // needs a real formula/salary setup before anyone can submit), but
-      // wrong here because no test department will ever get one. So this
-      // snapshot - and only this snapshot, on these 8 departments' own
-      // BudgetLine rows - is deliberately taken as DEPARTMENT_INPUT
-      // whenever the shared Account is FORMULA, so the line is editable
-      // like every other 2027 figure. The shared Account row itself keeps
-      // its real `entryType: "FORMULA"` untouched (see accountRows above),
-      // so a real department's own createBudgetVersionDraft still gets the
-      // genuine FORMULA/locked behavior for the exact same account - this
+      // Stage 2A's whole purpose is letting a human type in EVERY 2027
+      // figure by hand, for every applicable account, regardless of what
+      // the shared master data classifies it as. A FORMULA account with no
+      // FormulaDefinition/SalaryDataSource ever seeded for these test
+      // accounts (see this module's doc comment) would otherwise resolve
+      // NOT_CONFIGURED and permanently lock the field behind "尚未設定";
+      // a NOT_BUDGETED account (固定為0，不編列 - e.g. 績效獎金/人事廣告費/
+      // 捐贈) would otherwise stay fixed at 0 with no input field at all,
+      // via the exact same isLocked flag. Both are correct behavior for a
+      // REAL department (a genuinely unconfigured formula needs real setup
+      // before submission; a genuinely not-budgeted account is never meant
+      // to be edited), but wrong here because Stage 2A test departments
+      // exist specifically for manual-entry practice on every cost, with
+      // no formula/salary-source setup or "this is never budgeted" policy
+      // ever intended for them. So EVERY account snapshotted onto these 8
+      // departments' own BudgetLine rows - not just FORMULA-classified ones
+      // - is unconditionally taken as editable DEPARTMENT_INPUT here. The
+      // shared Account row itself keeps its real entryType untouched (see
+      // accountRows above), so a real department's own
+      // createBudgetVersionDraft still gets the genuine FORMULA-locked or
+      // NOT_BUDGETED-fixed-at-0 behavior for the exact same account - this
       // override only ever changes what gets snapshotted into a Stage 2A
       // test department's own BudgetLine, never the shared master data.
-      // NOT_BUDGETED accounts (固定為0，不編列) are intentionally left
-      // alone - only FORMULA is overridden.
-      const entryTypeSnapshot = account.entryType === "FORMULA" ? "DEPARTMENT_INPUT" : account.entryType;
+      const entryTypeSnapshot = "DEPARTMENT_INPUT";
       const formulaStatus = "NOT_APPLICABLE";
-      const isLocked = entryTypeSnapshot !== "DEPARTMENT_INPUT";
+      const isLocked = false;
       const derived = deriveLineTotals({
         priorYearOriginalBudget: amount,
         nextYearTargetExcludingNew: 0,
@@ -267,31 +308,44 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
       headcount2026: headcount,
       accountCount: applicableAccounts.length,
       totalProjection2026: deptTotal.toFixed(0),
+      // Placeholders - overwritten below by summariesWithEditability, which
+      // computes the real counts from a fresh post-transaction DB read
+      // (this loop runs before the transaction and cannot know whether a
+      // pre-existing row was actually upgraded).
+      totalBudgetLines: 0,
+      editableBudgetLines: 0,
     });
   }
 
   const stage2aVersionIds = STAGE2A_DEPARTMENTS.map((d) => versionId(d.code));
 
-  // Upgrade path for an environment seeded before the entryTypeSnapshot
-  // override above existed (e.g. Preview, already stress-seeded once): a
-  // line that createMany/skipDuplicates left alone because it already
-  // exists can still be sitting in some OLD locked state from before this
-  // fix. Deliberately matches on entryTypeSnapshot='FORMULA' ALONE (not
-  // also requiring formulaStatus='NOT_CONFIGURED'/isLocked=true, as an
-  // earlier version of this query did) - post-fix, no Stage 2A line should
-  // EVER be snapshotted as FORMULA (see the entryTypeSnapshot override
-  // above), so any line still carrying that value is, by definition, a
-  // leftover from a prior code version, regardless of exactly which
-  // formulaStatus/isLocked combination that prior version happened to
-  // write (NOT_CONFIGURED, a stale CONFIGURED, or anything else) - one
-  // broad condition on the single invariant that is actually guaranteed,
-  // rather than an exact-match on values that could vary across the
-  // history of this seed. A genuinely real department's own
-  // createBudgetVersionDraft-created NOT_CONFIGURED lines are excluded
-  // here by requiring BOTH bv."isTestData" AND d."isTestData", and are
-  // further narrowed to just this run's own deterministic version ids -
-  // so this can never touch 財務管理處 or any other real department's
-  // legitimately-unconfigured formula lines.
+  // Upgrade path for an environment seeded before the current (unconditional,
+  // every-entryType) override above existed (e.g. Preview, already
+  // stress-seeded once - or seeded by an even earlier version of this seed
+  // that only unlocked FORMULA and left NOT_BUDGETED accounts like
+  // 績效獎金/人事廣告費/捐贈 permanently fixed at 0). A line that
+  // createMany/skipDuplicates left alone because it already exists can
+  // still be sitting in ANY such old locked state.
+  //
+  // Deliberately matches on `bl."isLocked" = true` ALONE - not on a
+  // specific entryTypeSnapshot/formulaStatus value - because post-fix, NO
+  // Stage 2A line should EVER be isLocked (see the override above: always
+  // DEPARTMENT_INPUT / NOT_APPLICABLE / isLocked=false), so any line still
+  // locked is, by definition, a leftover from a prior code version,
+  // regardless of which entryType (FORMULA, NOT_BUDGETED, or anything else
+  // this schema might grow in the future) or formulaStatus it happens to
+  // carry. This is the one invariant that is actually guaranteed by the
+  // current code, so it is the only condition this query needs. A
+  // genuinely real department's own createBudgetVersionDraft-created
+  // locked lines are excluded here by requiring BOTH bv."isTestData" AND
+  // d."isTestData", and are further narrowed to just this run's own
+  // deterministic version ids - so this can never touch 財務管理處 or any
+  // other real department's legitimately-locked lines. Deliberately NOT
+  // scoped to BudgetVersion.status: fixing entryTypeSnapshot/isLocked on a
+  // SUBMITTED/APPROVED test version's lines is harmless (status itself is
+  // never touched here) and leaves the version already correctly unlocked
+  // the moment it is later withdrawn/returned to DRAFT, rather than
+  // needing yet another seed run at that point.
   //
   // Deliberately a raw UPDATE naming only these three columns: it does NOT
   // go through Prisma's `update`/`updateMany`, so BudgetLine.updatedAt
@@ -309,9 +363,9 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
   // it here cannot discard real user input. BudgetVersion.status is never
   // referenced or written by this query, so an already-SUBMITTED/APPROVED
   // test version is never reverted to DRAFT. Naturally idempotent: once a
-  // line has been upgraded its entryTypeSnapshot is no longer FORMULA, so
-  // a later re-run's WHERE clause simply matches nothing for it.
-  const unlockLegacyFormulaLinesQuery = prisma.$executeRaw`
+  // line has been upgraded it is no longer isLocked, so a later re-run's
+  // WHERE clause simply matches nothing for it.
+  const unlockLegacyLockedLinesQuery = prisma.$executeRaw`
     UPDATE "BudgetLine" AS bl
     SET "entryTypeSnapshot" = 'DEPARTMENT_INPUT'::"AccountEntryType",
         "formulaStatus" = 'NOT_APPLICABLE'::"FormulaStatus",
@@ -322,7 +376,7 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
       AND bv."id" IN (${Prisma.join(stage2aVersionIds)})
       AND bv."isTestData" = true
       AND d."isTestData" = true
-      AND bl."entryTypeSnapshot" = 'FORMULA'::"AccountEntryType"
+      AND bl."isLocked" = true
   `;
 
   const auditLogQuery = prisma.auditLog.create({
@@ -344,37 +398,95 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     prisma.account.createMany({ data: accountRows, skipDuplicates: true }),
     prisma.budgetVersion.createMany({ data: versionRows, skipDuplicates: true }),
     prisma.budgetLine.createMany({ data: lineRows, skipDuplicates: true }),
-    unlockLegacyFormulaLinesQuery,
+    unlockLegacyLockedLinesQuery,
     auditLogQuery,
   ]);
 
   // Read-your-own-write verification, independent of the UPDATE's own row
   // count: re-query the same 8 departments' lines from scratch and confirm
-  // none of them are still locked behind a formula. This is deliberately
-  // NOT trusted to the transaction above succeeding "in principle" - if any
-  // line here is still entryTypeSnapshot=FORMULA or formulaStatus=
-  // NOT_CONFIGURED, this function throws rather than returning a success
-  // shape, so the API (see api/demo/stage2a-seed/route.ts) can never report
-  // "初始化成功" while a real department preparer would still see 尚未設定.
-  const residualLines = await prisma.budgetLine.findMany({
-    where: {
-      budgetVersionId: { in: stage2aVersionIds },
-      budgetVersion: { isTestData: true },
-      OR: [{ entryTypeSnapshot: "FORMULA" }, { formulaStatus: "NOT_CONFIGURED" }],
-    },
+  // NONE of them are still locked, for ANY reason (FORMULA, NOT_BUDGETED,
+  // or anything else) - not just the FORMULA/NOT_CONFIGURED case an earlier
+  // version of this check covered. This is deliberately NOT trusted to the
+  // transaction above succeeding "in principle": if any line in a DRAFT or
+  // RETURNED Stage 2A version - the only statuses a preparer can actually
+  // edit, see BudgetVersionClient.tsx's own `editable` check - is still
+  // isLocked, this function throws rather than returning a success shape,
+  // so the API (see api/demo/stage2a-seed/route.ts) can never report
+  // "初始化成功" while a preparer would still see a fixed 0 with no input.
+  const allStage2aLines = await prisma.budgetLine.findMany({
+    where: { budgetVersionId: { in: stage2aVersionIds }, budgetVersion: { isTestData: true } },
     include: { account: true, budgetVersion: { include: { department: true } } },
   });
-  const remainingLockedLines = residualLines.filter((l) => l.entryTypeSnapshot === "FORMULA").length;
-  const remainingUnconfiguredFormulaLines = residualLines.filter((l) => l.formulaStatus === "NOT_CONFIGURED").length;
-  const budgetLinesInspected = await prisma.budgetLine.count({ where: { budgetVersionId: { in: stage2aVersionIds } } });
+  const budgetLinesInspected = allStage2aLines.length;
 
-  if (remainingLockedLines > 0 || remainingUnconfiguredFormulaLines > 0) {
-    const codes = residualLines.map((l) => `${l.budgetVersion.department.code}/${l.account.code}`).join("、");
+  // The "must be fully editable" rule only applies to versions a preparer
+  // can actually edit right now (DRAFT/RETURNED) - a SUBMITTED/UNDER_REVIEW/
+  // APPROVED version is correctly read-only regardless of its lines'
+  // isLocked value (workflow-status gating, not this data check's concern),
+  // so it is never treated as a failure here; the unconditional line-level
+  // unlock above still runs regardless of version status, so the version is
+  // already correct the moment it is later withdrawn/returned to DRAFT.
+  const editableScopeLines = allStage2aLines.filter((l) => l.budgetVersion.status === "DRAFT" || l.budgetVersion.status === "RETURNED");
+  const totalBudgetLines = editableScopeLines.length;
+  const nonEditableLines = editableScopeLines.filter((l) => !isLineEditable(l));
+  const editableBudgetLines = totalBudgetLines - nonEditableLines.length;
+  const nonEditableBudgetLines = nonEditableLines.length;
+
+  const nonEditableDetails: Stage2aNonEditableLineDetail[] = nonEditableLines.map((l) => ({
+    departmentCode: l.budgetVersion.department.code,
+    accountCode: l.account.code,
+    accountName: l.account.name,
+    entryTypeSnapshot: l.entryTypeSnapshot,
+    formulaStatus: l.formulaStatus,
+    isLocked: l.isLocked,
+    versionStatus: l.budgetVersion.status,
+    reason:
+      l.formulaStatus === "NOT_CONFIGURED"
+        ? "formulaStatus=NOT_CONFIGURED，前端顯示「尚未設定」"
+        : "isLocked=true，前端不顯示輸入框（固定顯示既有金額）",
+  }));
+
+  const remainingLockedLines = nonEditableBudgetLines;
+  const remainingFormulaLines = nonEditableLines.filter((l) => l.entryTypeSnapshot === "FORMULA").length;
+  // This schema's AccountEntryType enum only ever has FORMULA / NOT_BUDGETED
+  // / DEPARTMENT_INPUT (see prisma/schema.prisma) - there is no
+  // "CENTRAL_INPUT" or "AUTO_CALCULATED" value to ever match here. Kept as
+  // an explicit always-0 field so the API response shape stays stable even
+  // if this schema grows such a value in the future.
+  const remainingCentralInputLines = 0;
+  // Maps to this schema's real NOT_BUDGETED entryType (固定為0，不編列) -
+  // the other locking entryType besides FORMULA, and the one actually
+  // responsible for 績效獎金/人事廣告費/捐贈 and similar accounts still
+  // showing a fixed 0 with no input before this fix.
+  const remainingNotApplicableLines = nonEditableLines.filter((l) => l.entryTypeSnapshot === "NOT_BUDGETED").length;
+  const remainingUnconfiguredFormulaLines = nonEditableLines.filter((l) => l.formulaStatus === "NOT_CONFIGURED").length;
+
+  if (nonEditableBudgetLines > 0) {
+    const codes = nonEditableDetails.map((d) => `${d.departmentCode}/${d.accountCode}(${d.entryTypeSnapshot})`).join("、");
     throw new ApiError(
       500,
-      `Stage 2A 測試資料初始化未完全成功：仍有 ${residualLines.length} 筆科目維持鎖定或公式未設定狀態（尚未設定），不得視為成功。受影響科目（部門代碼/科目代碼）：${codes}`
+      `Stage 2A 測試資料初始化未完全成功：DRAFT/RETURNED 版本中仍有 ${nonEditableBudgetLines} 筆科目無法輸入（固定顯示金額或「尚未設定」），不得視為成功。受影響科目（部門代碼/科目代碼(entryType)）：${codes}`
     );
   }
+
+  // Per-department total/editable line counts, computed from the same
+  // fresh read above - never from the in-memory `summaries` built before
+  // the transaction, which cannot see whether a pre-existing row was
+  // actually upgraded. Scoped identically to the pass/fail check above
+  // (DRAFT/RETURNED only), so a department whose only version is already
+  // SUBMITTED reports 0/0 here rather than a stale pre-transaction guess.
+  const perDeptCounts = new Map<string, { total: number; editable: number }>();
+  for (const l of editableScopeLines) {
+    const code = l.budgetVersion.department.code;
+    const counts = perDeptCounts.get(code) ?? { total: 0, editable: 0 };
+    counts.total++;
+    if (isLineEditable(l)) counts.editable++;
+    perDeptCounts.set(code, counts);
+  }
+  const summariesWithEditability: Stage2aDepartmentSummary[] = summaries.map((s) => {
+    const counts = perDeptCounts.get(s.code) ?? { total: 0, editable: 0 };
+    return { ...s, totalBudgetLines: counts.total, editableBudgetLines: counts.editable };
+  });
 
   return {
     departmentsPlanned: departmentRows.length,
@@ -387,9 +499,16 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     budgetLinesCreated: lineResult.count,
     budgetLinesInspected,
     budgetLinesUnlocked: unlockedCount,
+    totalBudgetLines,
+    editableBudgetLines,
+    nonEditableBudgetLines,
     remainingLockedLines,
+    remainingFormulaLines,
+    remainingCentralInputLines,
+    remainingNotApplicableLines,
     remainingUnconfiguredFormulaLines,
-    departments: summaries,
+    nonEditableDetails,
+    departments: summariesWithEditability,
   };
 }
 
@@ -413,6 +532,12 @@ export async function getStage2ASeedStatus(): Promise<Stage2aDepartmentSummary[]
     const dept = departments.find((row) => row.code === d.code);
     const version = dept ? versionByDeptId.get(dept.id) : undefined;
     const total = version ? version.lines.reduce((acc, l) => acc + Number(l.currentYearProjection ?? 0), 0) : 0;
+    // Only meaningful (and only ever counted) for a DRAFT/RETURNED version,
+    // matching runStage2ATestSeed's own scope - a status-check-only read
+    // like this one never needs to distinguish further.
+    const isEditableScope = version?.status === "DRAFT" || version?.status === "RETURNED";
+    const lineCount = isEditableScope ? (version?.lines.length ?? 0) : 0;
+    const editableCount = isEditableScope ? (version?.lines.filter(isLineEditable).length ?? 0) : 0;
     return {
       code: d.code,
       name: d.name,
@@ -421,6 +546,8 @@ export async function getStage2ASeedStatus(): Promise<Stage2aDepartmentSummary[]
       headcount2026: dept?.priorYearHeadcount ?? 0,
       accountCount: version?.lines.length ?? 0,
       totalProjection2026: total.toFixed(0),
+      totalBudgetLines: lineCount,
+      editableBudgetLines: editableCount,
     };
   });
 }
