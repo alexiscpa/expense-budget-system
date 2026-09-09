@@ -12,6 +12,9 @@ import { STAGE2A_DEPARTMENTS } from "@/lib/testdata/stage2aDepartments";
 import { STAGE2A_ACCOUNTS } from "@/lib/testdata/stage2aAccounts";
 import { testBypassUser, TEST_BYPASS_USER_ID } from "@/lib/auth/testBypass";
 import { ApiError } from "@/lib/rbac/guard";
+import { updateDepartmentInputLine, createBudgetVersionDraft } from "@/lib/budget/lineService";
+import { submitBudgetVersion } from "@/lib/workflow/actions";
+import { grantDepartmentScope } from "./helpers/factory";
 
 const ORIGINAL_VERCEL_ENV = process.env.VERCEL_ENV;
 const ORIGINAL_AUTH_DISABLED = process.env.AUTH_DISABLED;
@@ -343,5 +346,130 @@ describe("Stage 2A stress seed - departments, accounts, budget drafts", () => {
     }
     const log = await prisma.auditLog.findFirstOrThrow({ where: { action: "STAGE2A_STRESS_SEED" } });
     expect(log.actorUserId).toBe(admin.id);
+  });
+});
+
+describe("Stage 2A - salary/bonus accounts are editable, not locked behind 尚未設定", () => {
+  beforeEach(() => setEnv("preview", "true"));
+
+  it("every FORMULA-classified account is snapshotted as editable DEPARTMENT_INPUT on a Stage 2A line, never NOT_CONFIGURED/locked", async () => {
+    const formulaAccountCodes = new Set(STAGE2A_ACCOUNTS.filter((a) => a.entryType === "FORMULA").map((a) => a.code));
+    expect(formulaAccountCodes.size).toBeGreaterThan(0); // sanity: this scenario actually exists in the real data
+
+    await runStage2ATestSeed(testBypassUser());
+
+    const lines = await prisma.budgetLine.findMany({
+      where: { budgetVersion: { isTestData: true } },
+      include: { account: true },
+    });
+    const formulaLines = lines.filter((l) => formulaAccountCodes.has(l.account.code));
+    expect(formulaLines.length).toBeGreaterThan(0);
+
+    for (const line of formulaLines) {
+      expect(line.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+      expect(line.formulaStatus).toBe("NOT_APPLICABLE");
+      expect(line.isLocked).toBe(false);
+    }
+  });
+
+  it("NOT_BUDGETED accounts are left alone (still locked at 0) - only FORMULA is overridden", async () => {
+    const notBudgetedCodes = new Set(STAGE2A_ACCOUNTS.filter((a) => a.entryType === "NOT_BUDGETED").map((a) => a.code));
+    expect(notBudgetedCodes.size).toBeGreaterThan(0);
+
+    await runStage2ATestSeed(testBypassUser());
+
+    const lines = await prisma.budgetLine.findMany({
+      where: { budgetVersion: { isTestData: true } },
+      include: { account: true },
+    });
+    const notBudgetedLines = lines.filter((l) => notBudgetedCodes.has(l.account.code));
+    expect(notBudgetedLines.length).toBeGreaterThan(0);
+    for (const line of notBudgetedLines) {
+      expect(line.entryTypeSnapshot).toBe("NOT_BUDGETED");
+      expect(line.isLocked).toBe(true);
+    }
+  });
+
+  it("the shared Account row's own entryType stays the real FORMULA classification - only the BudgetLine snapshot is overridden", async () => {
+    await runStage2ATestSeed(testBypassUser());
+
+    const formulaAccountCodes = STAGE2A_ACCOUNTS.filter((a) => a.entryType === "FORMULA").map((a) => a.code);
+    const accounts = await prisma.account.findMany({ where: { code: { in: formulaAccountCodes } } });
+    expect(accounts.length).toBe(formulaAccountCodes.length);
+    for (const account of accounts) {
+      expect(account.entryType).toBe("FORMULA");
+    }
+  });
+
+  it("a human can type a 2027 amount into a formerly-FORMULA salary/bonus line, and it persists", async () => {
+    const admin = await createUser({ role: "SYSTEM_ADMIN", companyWide: true });
+    const owner = await createUser({ role: "BUDGET_OWNER" });
+    await runStage2ATestSeed(toCurrentUser(admin));
+
+    const dept = await prisma.department.findUniqueOrThrow({ where: { code: "17103" } }); // 資訊處
+    await grantDepartmentScope(owner.id, dept.id);
+    const version = await prisma.budgetVersion.findFirstOrThrow({ where: { departmentId: dept.id, fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR } });
+    const salaryAccount = await prisma.account.findUniqueOrThrow({ where: { code: "6110010" } }); // 薪資支出, FORMULA in the shared master
+    const line = await prisma.budgetLine.findUniqueOrThrow({
+      where: { budgetVersionId_accountId: { budgetVersionId: version.id, accountId: salaryAccount.id } },
+    });
+    expect(line.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+
+    const updated = await updateDepartmentInputLine(toCurrentUser(owner), version.id, line.id, {
+      nextYearTargetExcludingNew: "7200000",
+      nextYearNewHireBudget: "500000",
+    });
+    expect(updated.nextYearTargetExcludingNew.toString()).toBe("7200000");
+    expect(updated.nextYearTotal.toString()).toBe("7700000");
+
+    const reread = await prisma.budgetLine.findUniqueOrThrow({ where: { id: line.id } });
+    expect(reread.nextYearTargetExcludingNew.toString()).toBe("7200000");
+  });
+
+  it("a Stage 2A department can be fully submitted once its formula-turned-editable lines are filled in", async () => {
+    const admin = await createUser({ role: "SYSTEM_ADMIN", companyWide: true });
+    const owner = await createUser({ role: "BUDGET_OWNER" });
+    await runStage2ATestSeed(toCurrentUser(admin));
+
+    const dept = await prisma.department.findUniqueOrThrow({ where: { code: "17103" } });
+    await grantDepartmentScope(owner.id, dept.id);
+    const version = await prisma.budgetVersion.findFirstOrThrow({ where: { departmentId: dept.id, fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR } });
+
+    // Submission must never be blocked by "尚未設定" - every line on this
+    // version is either NOT_BUDGETED (locked at 0, fine) or DEPARTMENT_INPUT
+    // (including the formerly-FORMULA ones), so submitting with the seeded
+    // defaults (all still 0) must succeed with no formula-related error.
+    const submitted = await submitBudgetVersion(toCurrentUser(owner), version.id);
+    expect(submitted.status).toBe("SUBMITTED");
+  });
+
+  it("does not modify how a REAL department's own createBudgetVersionDraft handles a shared FORMULA account - it still locks behind 尚未設定", async () => {
+    await runStage2ATestSeed(testBypassUser()); // seeds the shared M-class accounts, including FORMULA ones like 6110010
+
+    const realDept = await createDepartment({ code: "REALM01", name: "真實管理部門", class: "M" });
+    const owner = await createUser({ role: "BUDGET_OWNER" });
+    await grantDepartmentScope(owner.id, realDept.id);
+
+    // A real department's own draft, created through the normal (unmodified)
+    // production code path - never through runStage2ATestSeed.
+    const version = await createBudgetVersionDraft(toCurrentUser(owner), realDept.id, STAGE2A_BUDGET_FISCAL_YEAR);
+    const salaryAccount = await prisma.account.findUniqueOrThrow({ where: { code: "6110010" } });
+    const line = await prisma.budgetLine.findUniqueOrThrow({
+      where: { budgetVersionId_accountId: { budgetVersionId: version.id, accountId: salaryAccount.id } },
+    });
+
+    // The real production behavior is unchanged: no FormulaDefinition
+    // exists, so this genuinely-FORMULA account is NOT_CONFIGURED/locked,
+    // exactly as it always was - the Stage 2A override never touches this path.
+    expect(line.entryTypeSnapshot).toBe("FORMULA");
+    expect(line.formulaStatus).toBe("NOT_CONFIGURED");
+    expect(line.isLocked).toBe(true);
+
+    await expect(
+      updateDepartmentInputLine(toCurrentUser(owner), version.id, line.id, {
+        nextYearTargetExcludingNew: "1",
+        nextYearNewHireBudget: "0",
+      })
+    ).rejects.toThrow(ApiError);
   });
 });

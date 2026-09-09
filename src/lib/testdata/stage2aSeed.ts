@@ -67,7 +67,14 @@ export interface Stage2aSeedResult {
  * whose lines are pre-populated with each account's deterministic
  * STAGE2A_PROJECTION_FISCAL_YEAR (2026) projected amount - while every 2027
  * figure (nextYearTargetExcludingNew/nextYearNewHireBudget/justification)
- * stays at its normal "unfilled" value, never SUBMITTED/APPROVED.
+ * stays at its normal "unfilled" value, never SUBMITTED/APPROVED. Every
+ * applicable account - including ones the shared master data classifies as
+ * FORMULA (薪資支出/端午獎金/中秋獎金/年終獎金/職工退休金 and the like) -
+ * is snapshotted onto these 8 departments' own BudgetLine rows as editable
+ * DEPARTMENT_INPUT, since no FormulaDefinition/SalaryDataSource is ever
+ * seeded for them and Stage 2A's whole point is manual entry; see the
+ * entryTypeSnapshot override in the account loop below for exactly what
+ * this does and does not touch.
  *
  * Deliberately does NOT write through Account.priorYearReferenceAmount /
  * Department.priorYearHeadcount's normal createBudgetVersionDraft copy
@@ -189,13 +196,29 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
       });
       deptTotal += amount;
 
-      // No FormulaDefinition is ever seeded for these test accounts (see
-      // this module's doc comment) - a FORMULA account with no
-      // formulaKey resolves NOT_CONFIGURED immediately, exactly like
-      // createBudgetVersionDraft's own `if (!account.formulaKey)` branch,
-      // without needing to actually call evaluateFormula.
-      const formulaStatus = account.entryType === "FORMULA" ? "NOT_CONFIGURED" : "NOT_APPLICABLE";
-      const isLocked = account.entryType !== "DEPARTMENT_INPUT";
+      // Stage 2A's whole purpose is letting a human type in every 2027
+      // figure by hand - a FORMULA account with no FormulaDefinition/
+      // SalaryDataSource ever seeded for these test accounts (see this
+      // module's doc comment) would otherwise resolve NOT_CONFIGURED and
+      // permanently lock the field behind "尚未設定", exactly like
+      // createBudgetVersionDraft's own `if (!account.formulaKey)` branch -
+      // which is correct for a REAL department (a locked field genuinely
+      // needs a real formula/salary setup before anyone can submit), but
+      // wrong here because no test department will ever get one. So this
+      // snapshot - and only this snapshot, on these 8 departments' own
+      // BudgetLine rows - is deliberately taken as DEPARTMENT_INPUT
+      // whenever the shared Account is FORMULA, so the line is editable
+      // like every other 2027 figure. The shared Account row itself keeps
+      // its real `entryType: "FORMULA"` untouched (see accountRows above),
+      // so a real department's own createBudgetVersionDraft still gets the
+      // genuine FORMULA/locked behavior for the exact same account - this
+      // override only ever changes what gets snapshotted into a Stage 2A
+      // test department's own BudgetLine, never the shared master data.
+      // NOT_BUDGETED accounts (固定為0，不編列) are intentionally left
+      // alone - only FORMULA is overridden.
+      const entryTypeSnapshot = account.entryType === "FORMULA" ? "DEPARTMENT_INPUT" : account.entryType;
+      const formulaStatus = "NOT_APPLICABLE";
+      const isLocked = entryTypeSnapshot !== "DEPARTMENT_INPUT";
       const derived = deriveLineTotals({
         priorYearOriginalBudget: amount,
         nextYearTargetExcludingNew: 0,
@@ -215,7 +238,7 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
         nextYearTotal: derived.nextYearTotal,
         growthRateExcludingNew: derived.growthRateExcludingNew,
         growthRateIncludingNew: derived.growthRateIncludingNew,
-        entryTypeSnapshot: account.entryType,
+        entryTypeSnapshot,
         formulaStatus,
         isLocked,
         justification: null,

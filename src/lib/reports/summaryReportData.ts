@@ -248,7 +248,7 @@ export function buildUnitBlockTable(
   const inScope = financeVersionInScope(rawFinanceVersion, scope);
   const agg = buildFinanceAgg(inScope);
 
-  const rows: RawRow[] = block.departments.map((name) => {
+  const rows: RawRow[] = block.departments.map(({ name }) => {
     const isFinanceDept = Boolean(financeDepartmentName && name === financeDepartmentName);
     if (isFinanceDept && inScope && agg) {
       return {
@@ -287,7 +287,9 @@ export function buildUnitBlockTable(
     };
   });
 
-  const realInBlock = Boolean(financeDepartmentName && block.departments.includes(financeDepartmentName) && inScope && agg);
+  const realInBlock = Boolean(
+    financeDepartmentName && block.departments.some((d) => d.name === financeDepartmentName) && inScope && agg
+  );
   const subtotalLabel = `${block.title.split("、")[1] ?? block.title} 體系小計（暫計，尚有未編製部門）`;
   const subtotalRow: RawRow = realInBlock
     ? {
