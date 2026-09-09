@@ -7,7 +7,9 @@ import { isTestBypassUser } from "@/lib/auth/testBypass";
 import { isAuthBypassEnabled } from "@/lib/env";
 import { getDemoSeedStatus } from "@/lib/demo/seedDemoMasterData";
 import { DEMO_FISCAL_YEAR } from "@/lib/demo/constants";
+import { getStage2ASeedStatus } from "@/lib/testdata/stage2aSeed";
 import { DemoSeedPanel } from "./DemoSeedPanel";
+import { Stage2ASeedPanel } from "./Stage2ASeedPanel";
 import { CreateBudgetVersionForm } from "./CreateBudgetVersionForm";
 import { formatTaipeiDate } from "@/lib/format/date";
 
@@ -52,6 +54,7 @@ export default async function DashboardPage() {
       })
     : [];
   const demoSeedStatus = bypassActive ? await getDemoSeedStatus() : null;
+  const stage2aSeedStatus = bypassActive ? await getStage2ASeedStatus() : null;
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
@@ -65,6 +68,7 @@ export default async function DashboardPage() {
       </div>
 
       {bypassActive && <DemoSeedPanel initialStatus={demoSeedStatus} />}
+      {bypassActive && <Stage2ASeedPanel initialStatus={stage2aSeedStatus} />}
       {bypassActive && (
         <div className="mb-8 rounded border border-indigo-300 bg-indigo-50 p-4">
           <p className="mb-1 text-sm font-semibold text-indigo-900">費用預算彙總表（版型預覽）</p>
