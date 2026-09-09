@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 
+// Reads the caller's own session on every request (getCurrentUser()) to
+// decide which link to show - never a candidate for static generation.
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
   const user = await getCurrentUser();
 
