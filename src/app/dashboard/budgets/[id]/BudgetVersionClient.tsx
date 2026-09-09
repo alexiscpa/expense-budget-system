@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ClientApiError } from "@/lib/client/api";
 import { createPendingSaveTracker } from "@/lib/client/pendingSave";
+import { useDashboardBreadcrumb, useDashboardBackOverride } from "../../DashboardNavContext";
 import { computeCategorySummary, CATEGORY_LABELS } from "@/lib/budget/categorySummary";
 import { formatTaipeiDate } from "@/lib/format/date";
 import type { Role, AccountCommonCategory } from "@prisma/client";
@@ -106,17 +107,20 @@ const STICKY_COL = {
 } as const;
 
 /**
- * "← 回到預算總覽" - rendered identically at both required positions (see
- * BudgetVersionClient's own two usages) so the label, behavior, and styling
- * never drift apart. Deliberately styled as a secondary action (plain
- * border, slate text) - visibly less prominent than the primary
- * 送出申請／開始覆核 buttons (bg-brand-600, white text) - per spec. Shown
- * for every role and every version status; `busy` reflects only this
- * button's OWN in-flight click (backNavBusy), never the shared per-field
- * `busy` state - gating this on that shared flag would let a blur-triggered
- * save (fired by the browser's own focus-out just before this button's
- * click event is dispatched) disable the button between mousedown and
- * click, silently swallowing the very click meant to trigger the flush.
+ * "← 回到預算總覽" - the bottom copy of this button, placed next to
+ * 送出申請／開始覆核 so a long line-item table never forces a scroll back
+ * to the top just to leave the page (the top copy is the shared
+ * DashboardNav bar - see useDashboardBackOverride below - both call the
+ * exact same handleBackToDashboard/pendingSave, never two independent
+ * mechanisms). Deliberately styled as a secondary action (plain border,
+ * slate text) - visibly less prominent than the primary buttons
+ * (bg-brand-600, white text) - per spec. Shown for every role and every
+ * version status; `busy` reflects only this button's OWN in-flight click
+ * (backNavBusy), never the shared per-field `busy` state - gating this on
+ * that shared flag would let a blur-triggered save (fired by the browser's
+ * own focus-out just before this button's click event is dispatched)
+ * disable the button between mousedown and click, silently swallowing the
+ * very click meant to trigger the flush.
  */
 function BackToDashboardButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
   return (
@@ -124,6 +128,7 @@ function BackToDashboardButton({ busy, onClick }: { busy: boolean; onClick: () =
       type="button"
       disabled={busy}
       onClick={onClick}
+      aria-label="回到預算總覽"
       className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-50"
     >
       {busy ? "儲存中…" : "← 回到預算總覽"}
@@ -267,7 +272,14 @@ export function BudgetVersionClient({
    * awaiting it here always waits for the actual save - never a fixed
    * guess-and-hope delay - before deciding whether it is safe to navigate.
    */
-  async function handleBackToDashboard() {
+  // Wrapped in useCallback so its reference stays stable across renders
+  // (pendingSave/router are themselves stable, and setError/setBackNavBusy
+  // are guaranteed stable by React) - useDashboardBackOverride below
+  // re-registers this with the shared nav bar's context on every render
+  // where the reference changes, so a fresh closure every render would
+  // otherwise cause a render loop (register -> parent state update ->
+  // re-render -> new closure -> register again).
+  const handleBackToDashboard = useCallback(async () => {
     setBackNavBusy(true);
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
@@ -278,7 +290,7 @@ export function BudgetVersionClient({
       return;
     }
     router.push("/dashboard");
-  }
+  }, [pendingSave, router]);
 
   async function handleWithdraw() {
     setBusy(true);
@@ -331,11 +343,19 @@ export function BudgetVersionClient({
   if (version.status === "UNDER_REVIEW") availableActions.push("return", "approve", "reject");
   if (["LOCKED", "ADJUSTED"].includes(version.status)) availableActions.push("adjustment");
 
+  // The shared top nav bar (dashboard/layout.tsx) renders the ONE top
+  // "← 回到預算總覽" button for every /dashboard/** page - this page just
+  // supplies its own breadcrumb label and, critically, its own
+  // save-aware handler as that button's click target, so there is still
+  // only one pending-save mechanism (lib/client/pendingSave.ts) in play,
+  // never a second independent "back" implementation living in the shared
+  // bar. The bottom button below (next to 送出申請／開始覆核) stays
+  // rendered here directly, calling this exact same handler.
+  useDashboardBreadcrumb([version.department.name, `${version.fiscalYear}年度預算`]);
+  useDashboardBackOverride(handleBackToDashboard, backNavBusy);
+
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <div className="mb-2">
-        <BackToDashboardButton busy={backNavBusy} onClick={handleBackToDashboard} />
-      </div>
       <h1 className="mb-1 text-xl font-bold">
         {version.department.name} — {version.fiscalYear} 年度預算（v{version.versionNumber}）
       </h1>

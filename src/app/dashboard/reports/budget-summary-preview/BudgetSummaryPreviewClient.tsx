@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { formatAmountCell, formatCountCell, formatGrowthRateCell } from "@/lib/reports/summaryFormat";
 import {
   UNIT_BLOCKS,
@@ -288,6 +289,7 @@ export function BudgetSummaryPreviewClient({
 }) {
   const [tab, setTab] = useState<TabKey>("unit");
   const [dataScope, setDataScope] = useState<BudgetDataScope>(DEFAULT_DATA_SCOPE);
+  const router = useRouter();
 
   // Export-only: the fiscalYear=2027 version filtered by the currently-
   // selected 資料範圍, used solely for the disclaimer text and the export
@@ -341,6 +343,24 @@ export function BudgetSummaryPreviewClient({
       {tab === "unit" && <UnitTab deptEntries={deptEntries} dataScope={dataScope} />}
       {tab === "sga" && <SgaTab deptEntries={deptEntries} dataScope={dataScope} />}
       {tab === "production" && <ProductionTab deptEntries={deptEntries} dataScope={dataScope} />}
+
+      {/* Bottom copy of the shared nav bar's top button - this page's
+          tables can run well past one screen, so a reader who has scrolled
+          all the way down should not have to scroll back up just to leave.
+          Every StickyReportTable's own horizontal scroll is contained
+          within its own bounded div (see StickyReportTable), so this
+          page-level button - outside all of them - never moves with any
+          table's horizontal scroll regardless of which tab is active. */}
+      <div className="mt-8 border-t border-slate-200 pt-4">
+        <button
+          type="button"
+          onClick={() => router.push("/dashboard")}
+          aria-label="回到預算總覽"
+          className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
+        >
+          ← 回到預算總覽
+        </button>
+      </div>
     </main>
   );
 }
