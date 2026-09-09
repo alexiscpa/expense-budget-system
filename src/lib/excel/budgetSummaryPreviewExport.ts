@@ -1,31 +1,54 @@
 import ExcelJS from "exceljs";
 import { sanitizeCellText } from "@/lib/excel/sanitize";
 import { formatTaipeiDate } from "@/lib/format/date";
-import { TEMPLATE_FIGURES_DISCLAIMER, UNIT_BLOCKS } from "@/lib/reports/budgetSummaryPreviewData";
+import { UNIT_BLOCKS } from "@/lib/reports/budgetSummaryPreviewData";
 import {
   type BudgetDataScope,
   type ExportTableKey,
-  type FinanceVersionDto,
   type RawCell,
   type RawTable,
-  buildCompanySummaryTable,
-  buildProductionTable,
-  buildReportMeta,
-  buildSgaTable,
-  buildUnitBlockTable,
+  type ReportMeta,
   DATA_SCOPE_OPTIONS,
+  EXPORT_TABLE_KEYS,
+  isExportTableKey,
   provisionalNoteIfIncomplete,
-  REPORT_TITLE,
 } from "@/lib/reports/summaryReportData";
+import type { DeptSummaryEntry } from "@/lib/reports/multiDepartmentSummary";
+import {
+  buildMultiDeptCompanySummaryTable,
+  buildMultiDeptProductionTables,
+  buildMultiDeptReportMeta,
+  buildMultiDeptSgaTables,
+  buildMultiDeptUnitBlockTable,
+  completenessSummaryLine,
+  type MultiDeptReportingTables,
+} from "@/lib/reports/multiDeptExportTables";
 
+export { EXPORT_TABLE_KEYS, isExportTableKey };
 export type { ExportTableKey } from "@/lib/reports/summaryReportData";
 
 /**
  * Real .xlsx generation (exceljs) for the budget summary preview
- * (`/dashboard/reports/budget-summary-preview`) - Stage 1B §二. Every
- * number written here comes straight from lib/reports/summaryReportData.ts
- * (the same module the PDF export and the web page itself read from), so
- * the three can never show different figures for the same underlying data.
+ * (`/dashboard/reports/budget-summary-preview`).
+ *
+ * Root-cause fix (see the completion report for the full investigation):
+ * this file used to build every sheet from `fetchFinanceDepartmentAndVersion()`
+ * (財務管理處 only) via the OLD single-department builders in
+ * lib/reports/summaryReportData.ts - a SEPARATE data path from the one the
+ * on-screen preview uses (`fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES)` +
+ * lib/reports/multiDepartmentSummary.ts), which is why the web page showed
+ * Stage 2A's 8 test departments' real figures while every Excel export
+ * still showed only 財務管理處 (usually "未編製", since 財務管理處 itself has
+ * no fiscalYear=2027 draft in this environment) and every other department
+ * as a hand-typed placeholder row.
+ *
+ * Every table below is built by lib/reports/multiDeptExportTables.ts, which
+ * calls the EXACT SAME aggregation functions
+ * (buildDeptAgg/buildLineAgg/buildReportingAccountAgg/buildScopeCompleteness/
+ * buildUnmappedAccountRows) the web page's BudgetSummaryPreviewClient.tsx
+ * calls - one calculation, shared, never reimplemented here. The OLD
+ * builders in summaryReportData.ts are untouched and still feed the PDF
+ * export (out of scope this round - see the export API route).
  */
 
 // Colors per the reference spreadsheet convention (matches
@@ -37,10 +60,11 @@ const FILL_SUBTOTAL = "FFFFEDD5"; // 小計：淡橘色
 const FILL_TOTAL = "FFFEF08A"; // 分類/最終總計：黃色
 const FONT_SECTION_TITLE = "FFDC2626"; // 體系標題：紅字
 
-/** Excel number format literals, exactly as specified (Stage 1B §二). */
+/** Excel number format literals, exactly as specified. */
 const AMOUNT_NUMFMT = "#,##0;[Red](#,##0);-";
 const GROWTH_NUMFMT = "0.0%;[Red](0.0%)";
 const COUNT_NUMFMT = "#,##0;[Red](#,##0);-";
+const DATE_NUMFMT = "yyyy.mm.dd";
 
 function sanitizedText(value: string): string {
   return sanitizeCellText(value);
@@ -150,6 +174,16 @@ function writeRawCells(excelRow: ExcelJS.Row, cells: RawCell[]) {
           cell.alignment = { horizontal: "right", vertical: "middle" };
         }
         break;
+      case "date":
+        if (c.value === null) {
+          cell.value = "—";
+          cell.alignment = { horizontal: "right", vertical: "middle" };
+        } else {
+          cell.value = c.value;
+          cell.numFmt = DATE_NUMFMT;
+          cell.alignment = { horizontal: "right", vertical: "middle" };
+        }
+        break;
     }
   });
 }
@@ -164,13 +198,11 @@ function applyRowStyle(excelRow: ExcelJS.Row, style: RawTable["rows"][number]["s
   }
 }
 
-/** Metadata block (title + report type + as-of/export time + data scope + provisional note) written above every table. */
-function writeMetaBlock(
-  sheet: ExcelJS.Worksheet,
-  startRow: number,
-  meta: ReturnType<typeof buildReportMeta>,
-  colSpan: number
-): number {
+const MULTI_DEPT_DATA_NOTE =
+  "Preview 測試頁：顯示財務管理處與 Stage 2A 8 個測試部門（標示【測試資料】）的即時資料，其餘部門尚未匯入，一律顯示「—」（絕不顯示為 0）。";
+
+/** Metadata block (title + report type + as-of/export time + data scope + completeness note) written above every table. */
+function writeMetaBlock(sheet: ExcelJS.Worksheet, startRow: number, meta: ReportMeta, colSpan: number, extraNoteLine?: string): number {
   let row = startRow;
 
   const titleRow = sheet.getRow(row);
@@ -191,10 +223,18 @@ function writeMetaBlock(
   row += 1;
 
   const disclaimerRow = sheet.getRow(row);
-  disclaimerRow.getCell(1).value = TEMPLATE_FIGURES_DISCLAIMER;
+  disclaimerRow.getCell(1).value = MULTI_DEPT_DATA_NOTE;
   disclaimerRow.getCell(1).font = { italic: true, size: 9, color: { argb: "FF92400E" } };
   sheet.mergeCells(row, 1, row, Math.max(colSpan, 2));
   row += 1;
+
+  if (extraNoteLine) {
+    const noteLine = sheet.getRow(row);
+    noteLine.getCell(1).value = extraNoteLine;
+    noteLine.getCell(1).font = { size: 9, color: { argb: "FF475569" } };
+    sheet.mergeCells(row, 1, row, Math.max(colSpan, 2));
+    row += 1;
+  }
 
   const note = provisionalNoteIfIncomplete(meta);
   if (note) {
@@ -235,7 +275,9 @@ function finalizeSheet(
 }
 
 const UNIT_COL_WIDTHS = [24, 10, 16, 12, 16, 14, 18, 16, 10, 12, 16];
-const ACCOUNT_COL_WIDTHS = [8, 26, 16, 16, 16, 18, 16, 14, 16, 14];
+const REPORTING_COL_WIDTHS = [6, 14, 26, 16, 18, 16, 18, 16, 12];
+const OVERVIEW_COL_WIDTHS = [24, 12, 16, 16, 14, 18];
+const UNMAPPED_COL_WIDTHS = [12, 16, 12, 22, 14, 14];
 const COMPANY_COL_WIDTHS = [30, 16, 16, 16, 16, 16, 12];
 
 function sheetNameFor(key: string): string {
@@ -255,8 +297,12 @@ function sheetNameFor(key: string): string {
 }
 
 export interface BuildExportInput {
-  financeDepartment: { code: string; name: string } | null;
-  financeVersion: FinanceVersionDto | null;
+  /** Every code-addressable department (財務管理處 + Stage 2A's 8 test
+   * departments) with its own fiscalYear=2027 BudgetVersion/lines, if any -
+   * the SAME fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES) call the web
+   * page uses (see lib/reports/fetchFinanceVersion.ts). This is the whole
+   * fix: Excel now reads exactly what the screen reads, nothing else. */
+  deptEntries: DeptSummaryEntry[];
   scope: BudgetDataScope;
   exportedAtIso: string;
 }
@@ -272,12 +318,40 @@ function unitBlockKeyToBlock(key: string) {
   return UNIT_BLOCKS.find((b) => b.key === blockKey) ?? null;
 }
 
+/** Writes one 部門總覽 + 科目別彙總 (+ optional 待確認科目) block into `sheet`, returns the info finalizeSheet needs. */
+function writeReportingTables(
+  sheet: ExcelJS.Worksheet,
+  tables: MultiDeptReportingTables,
+  startRow: number
+): { headerGroupRow: number; headerLabelRow: number; endRow: number } {
+  let row = startRow;
+
+  const noteRow = sheet.getRow(row);
+  noteRow.getCell(1).value = sanitizedText(completenessSummaryLine(tables.completeness, formatTaipeiDate));
+  noteRow.getCell(1).font = { size: 9, color: { argb: "FF475569" } };
+  row += 2;
+
+  const overviewResult = writeTable(sheet, tables.overview, row, OVERVIEW_COL_WIDTHS, "部門總覽");
+  row = overviewResult.endRow + 2;
+
+  const accountsResult = writeTable(sheet, tables.accounts, row, REPORTING_COL_WIDTHS, "科目別彙總（每個報表科目一列，不重複列出部門）");
+  row = accountsResult.endRow + 2;
+
+  let endRow = accountsResult.endRow;
+  if (tables.unmapped) {
+    const unmappedResult = writeTable(sheet, tables.unmapped, row, UNMAPPED_COL_WIDTHS, tables.unmapped.title);
+    endRow = unmappedResult.endRow;
+  }
+
+  return { headerGroupRow: accountsResult.headerGroupRow, headerLabelRow: accountsResult.headerLabelRow, endRow };
+}
+
 async function buildSingleTableWorkbook(tableKey: ExportTableKey, input: BuildExportInput): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "expense-budget-system";
   workbook.created = new Date(input.exportedAtIso);
 
-  const meta = buildReportMeta(tableKey, input.financeVersion, input.scope, input.exportedAtIso, formatTaipeiDate);
+  const meta = buildMultiDeptReportMeta(tableKey, input.deptEntries, input.scope, input.exportedAtIso, formatTaipeiDate);
   const sheet = workbook.addWorksheet(sheetNameFor(tableKey), { views: [{ showGridLines: true }] });
 
   if (tableKey === "unit-all") {
@@ -286,7 +360,7 @@ async function buildSingleTableWorkbook(tableKey: ExportTableKey, input: BuildEx
     let lastHeaderLabelRow = -1;
     let lastEndRow = row;
     for (const block of UNIT_BLOCKS) {
-      const table = buildUnitBlockTable(block, input.financeDepartment?.name ?? null, input.financeVersion, input.scope, formatTaipeiDate);
+      const table = buildMultiDeptUnitBlockTable(block, input.deptEntries);
       const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, UNIT_COL_WIDTHS, block.title);
       if (firstHeaderGroupRow === -1) firstHeaderGroupRow = headerGroupRow;
       lastHeaderLabelRow = headerLabelRow;
@@ -297,22 +371,22 @@ async function buildSingleTableWorkbook(tableKey: ExportTableKey, input: BuildEx
   } else if (tableKey.startsWith("unit-")) {
     const block = unitBlockKeyToBlock(tableKey);
     if (!block) throw new Error(`unknown unit block key: ${tableKey}`);
-    const table = buildUnitBlockTable(block, input.financeDepartment?.name ?? null, input.financeVersion, input.scope, formatTaipeiDate);
+    const table = buildMultiDeptUnitBlockTable(block, input.deptEntries);
     const row = writeMetaBlock(sheet, 1, meta, UNIT_COL_WIDTHS.length);
     const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, UNIT_COL_WIDTHS, block.title);
     finalizeSheet(sheet, headerGroupRow, headerLabelRow, 1, endRow, UNIT_COL_WIDTHS.length);
   } else if (tableKey === "sga") {
-    const table = buildSgaTable(input.financeVersion, input.scope);
-    const row = writeMetaBlock(sheet, 1, meta, ACCOUNT_COL_WIDTHS.length);
-    const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, ACCOUNT_COL_WIDTHS);
-    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 2, endRow, ACCOUNT_COL_WIDTHS.length);
+    const tables = buildMultiDeptSgaTables(input.deptEntries);
+    const row = writeMetaBlock(sheet, 1, meta, REPORTING_COL_WIDTHS.length, "管銷研範圍：營業單位（含海外單位）、管理單位、研發單位——排除所有生產單位。");
+    const { headerGroupRow, headerLabelRow, endRow } = writeReportingTables(sheet, tables, row);
+    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 3, endRow, REPORTING_COL_WIDTHS.length);
   } else if (tableKey === "production") {
-    const table = buildProductionTable();
-    const row = writeMetaBlock(sheet, 1, meta, ACCOUNT_COL_WIDTHS.length);
-    const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, ACCOUNT_COL_WIDTHS);
-    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 2, endRow, ACCOUNT_COL_WIDTHS.length);
+    const tables = buildMultiDeptProductionTables(input.deptEntries);
+    const row = writeMetaBlock(sheet, 1, meta, REPORTING_COL_WIDTHS.length, "生產費用獨立列示，不併入管銷研；僅納入生產部、台灣廠品保處。");
+    const { headerGroupRow, headerLabelRow, endRow } = writeReportingTables(sheet, tables, row);
+    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 3, endRow, REPORTING_COL_WIDTHS.length);
   } else if (tableKey === "company") {
-    const table = buildCompanySummaryTable(input.financeVersion, input.scope);
+    const table = buildMultiDeptCompanySummaryTable(input.deptEntries);
     const row = writeMetaBlock(sheet, 1, meta, COMPANY_COL_WIDTHS.length);
     const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, COMPANY_COL_WIDTHS);
     finalizeSheet(sheet, headerGroupRow, headerLabelRow, 1, endRow, COMPANY_COL_WIDTHS.length);
@@ -323,7 +397,7 @@ async function buildSingleTableWorkbook(tableKey: ExportTableKey, input: BuildEx
   return workbook;
 }
 
-/** "匯出全部彙總表" - one workbook, five worksheets (Stage 1B §二). */
+/** "匯出全部彙總表" - one workbook, at least the three required worksheets (單位別費用與編制／管銷研科目彙總／生產科目彙總), plus 全公司費用合計 and 報表說明 - all built from the same `input.deptEntries` snapshot so no two sheets can disagree. */
 async function buildFullWorkbook(input: BuildExportInput): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "expense-budget-system";
@@ -331,9 +405,9 @@ async function buildFullWorkbook(input: BuildExportInput): Promise<ExcelJS.Workb
 
   // 1. 全公司費用合計
   {
-    const meta = buildReportMeta("company", input.financeVersion, input.scope, input.exportedAtIso, formatTaipeiDate);
+    const meta = buildMultiDeptReportMeta("company", input.deptEntries, input.scope, input.exportedAtIso, formatTaipeiDate);
     const sheet = workbook.addWorksheet(sheetNameFor("company"));
-    const table = buildCompanySummaryTable(input.financeVersion, input.scope);
+    const table = buildMultiDeptCompanySummaryTable(input.deptEntries);
     const row = writeMetaBlock(sheet, 1, meta, COMPANY_COL_WIDTHS.length);
     const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, COMPANY_COL_WIDTHS);
     finalizeSheet(sheet, headerGroupRow, headerLabelRow, 1, endRow, COMPANY_COL_WIDTHS.length);
@@ -341,14 +415,14 @@ async function buildFullWorkbook(input: BuildExportInput): Promise<ExcelJS.Workb
 
   // 2. 單位別費用與編制 (all four blocks stacked in one sheet)
   {
-    const meta = buildReportMeta("unit-all", input.financeVersion, input.scope, input.exportedAtIso, formatTaipeiDate);
+    const meta = buildMultiDeptReportMeta("unit-all", input.deptEntries, input.scope, input.exportedAtIso, formatTaipeiDate);
     const sheet = workbook.addWorksheet(sheetNameFor("unit-all"));
     let row = writeMetaBlock(sheet, 1, meta, UNIT_COL_WIDTHS.length);
     let firstHeaderGroupRow = -1;
     let lastHeaderLabelRow = -1;
     let lastEndRow = row;
     for (const block of UNIT_BLOCKS) {
-      const table = buildUnitBlockTable(block, input.financeDepartment?.name ?? null, input.financeVersion, input.scope, formatTaipeiDate);
+      const table = buildMultiDeptUnitBlockTable(block, input.deptEntries);
       const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, UNIT_COL_WIDTHS, block.title);
       if (firstHeaderGroupRow === -1) firstHeaderGroupRow = headerGroupRow;
       lastHeaderLabelRow = headerLabelRow;
@@ -360,37 +434,36 @@ async function buildFullWorkbook(input: BuildExportInput): Promise<ExcelJS.Workb
 
   // 3. 管銷研科目彙總
   {
-    const meta = buildReportMeta("sga", input.financeVersion, input.scope, input.exportedAtIso, formatTaipeiDate);
+    const meta = buildMultiDeptReportMeta("sga", input.deptEntries, input.scope, input.exportedAtIso, formatTaipeiDate);
     const sheet = workbook.addWorksheet(sheetNameFor("sga"));
-    const table = buildSgaTable(input.financeVersion, input.scope);
-    const row = writeMetaBlock(sheet, 1, meta, ACCOUNT_COL_WIDTHS.length);
-    const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, ACCOUNT_COL_WIDTHS);
-    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 2, endRow, ACCOUNT_COL_WIDTHS.length);
+    const tables = buildMultiDeptSgaTables(input.deptEntries);
+    const row = writeMetaBlock(sheet, 1, meta, REPORTING_COL_WIDTHS.length, "管銷研範圍：營業單位（含海外單位）、管理單位、研發單位——排除所有生產單位。");
+    const { headerGroupRow, headerLabelRow, endRow } = writeReportingTables(sheet, tables, row);
+    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 3, endRow, REPORTING_COL_WIDTHS.length);
   }
 
   // 4. 生產科目彙總
   {
-    const meta = buildReportMeta("production", input.financeVersion, input.scope, input.exportedAtIso, formatTaipeiDate);
+    const meta = buildMultiDeptReportMeta("production", input.deptEntries, input.scope, input.exportedAtIso, formatTaipeiDate);
     const sheet = workbook.addWorksheet(sheetNameFor("production"));
-    const table = buildProductionTable();
-    const row = writeMetaBlock(sheet, 1, meta, ACCOUNT_COL_WIDTHS.length);
-    const { headerGroupRow, headerLabelRow, endRow } = writeTable(sheet, table, row, ACCOUNT_COL_WIDTHS);
-    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 2, endRow, ACCOUNT_COL_WIDTHS.length);
+    const tables = buildMultiDeptProductionTables(input.deptEntries);
+    const row = writeMetaBlock(sheet, 1, meta, REPORTING_COL_WIDTHS.length, "生產費用獨立列示，不併入管銷研；僅納入生產部、台灣廠品保處。");
+    const { headerGroupRow, headerLabelRow, endRow } = writeReportingTables(sheet, tables, row);
+    finalizeSheet(sheet, headerGroupRow, headerLabelRow, 3, endRow, REPORTING_COL_WIDTHS.length);
   }
 
   // 5. 報表說明
   {
     const sheet = workbook.addWorksheet("報表說明");
     const lines = [
-      `${REPORT_TITLE} - 報表說明`,
+      "2027年度費用預算彙總表 - 報表說明",
       "",
       "版型預覽說明：",
-      `・${TEMPLATE_FIGURES_DISCLAIMER}`,
-      "・僅財務管理處為實際測試資料，其他部門尚未匯入，一律顯示「—」（絕不顯示為 0）。",
+      `・${MULTI_DEPT_DATA_NOTE}`,
       "・「2026推估」僅來自 fiscalYear=2027 之 BudgetVersion 本身的 priorYearOriginalBudget（即 Account.priorYearReferenceAmount）。",
       "・現有 fiscalYear=2026（或其他年度）之 BudgetVersion 絕不會顯示於「2027目標」欄位。",
+      "・尚未輸入 2027 年度金額的部門/科目一律顯示「—」，絕不顯示為 0；使用者已明確輸入的 0 會如實顯示為 0。",
       `・資料範圍：${dataScopeLabel(input.scope)}`,
-      `・資料截至：${input.financeVersion ? formatTaipeiDate(input.financeVersion.lastPreparedAt) : "尚無資料"}`,
       `・匯出時間：${formatTaipeiDate(input.exportedAtIso)}`,
       "・本檔案完全由系統唯讀查詢產生，匯出動作本身不會新增、刪除或修改任何資料庫資料。",
     ];

@@ -17,18 +17,18 @@ export const dynamic = "force-dynamic";
  * AUTH_DISABLED=true otherwise - see lib/env.ts). Read-only: this page
  * never writes to the database.
  *
- * Two independent, deliberately separate fetches:
- *  - fetchFinanceDepartmentAndVersion() - 財務管理處 only, unchanged, still
- *    shared verbatim with the Excel/PDF export API route (see
- *    lib/reports/fetchFinanceVersion.ts) so the web view's export links and
- *    that route can never disagree about 財務管理處's own figures. Export
- *    has not been extended beyond 財務管理處 this round.
+ * Two fetches:
+ *  - fetchFinanceDepartmentAndVersion() - 財務管理處 only. Still shared
+ *    verbatim with the PDF export (see lib/reports/fetchFinanceVersion.ts) -
+ *    PDF has not been extended to the multi-department data below yet.
  *  - fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES) - every other real,
- *    code-addressable department (Stage 2A's 8 test departments), used only
- *    by the on-screen tabs. A department name in UNIT_BLOCKS with no known
- *    code stays a hand-typed representative placeholder rendering "—" - no
- *    Department/Account/BudgetVersion row is created, imported, or assumed
- *    to exist for those.
+ *    code-addressable department (Stage 2A's 8 test departments) plus
+ *    財務管理處 itself, used by the on-screen tabs AND now by the Excel
+ *    export API route (same call, server-side - see
+ *    lib/excel/budgetSummaryPreviewExport.ts) so the two can never disagree.
+ *    A department name in UNIT_BLOCKS with no known code stays a hand-typed
+ *    representative placeholder rendering "—" - no Department/Account/
+ *    BudgetVersion row is created, imported, or assumed to exist for those.
  */
 export default async function BudgetSummaryPreviewPage() {
   if (!isAuthBypassEnabled()) notFound();

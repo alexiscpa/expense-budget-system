@@ -36,14 +36,15 @@ import { formatTaipeiDate } from "@/lib/format/date";
 import type { DeptClass } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
-// Excel/PDF export links (Stage 1B) - a plain <a download> to the export API
-// route is enough since it already answers with a real `attachment`
+// Excel/PDF export links - a plain <a download> to the export API route is
+// enough since it already answers with a real `attachment`
 // Content-Disposition; no client-side fetch/blob juggling needed.
 //
-// NOTE: the export API route still reads only 財務管理處's own data (see
-// lib/reports/fetchFinanceVersion.ts#fetchFinanceDepartmentAndVersion,
-// unchanged) - it has not been extended to the multi-department data this
-// page now shows on screen. See ExportScopeNotice below.
+// Excel now reads the exact same multi-department query this page uses
+// (fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES) - see
+// lib/excel/budgetSummaryPreviewExport.ts for the root-cause history of the
+// earlier "web shows Stage 2A data, Excel shows an empty placeholder" bug).
+// PDF has not been extended yet - see ExportScopeNotice below.
 // ---------------------------------------------------------------------------
 
 function exportHref(tableKey: ExportTableKey, format: "xlsx" | "pdf", scope: BudgetDataScope): string {
@@ -82,7 +83,7 @@ function ExportButtons({
 function ExportScopeNotice() {
   return (
     <p className="mb-3 rounded bg-slate-100 px-3 py-2 text-xs text-slate-500">
-      匯出Excel／PDF目前僅包含財務管理處資料，尚未涵蓋畫面上其他部門（含 Stage 2A 測試部門）－此為既有匯出功能，本次未擴充。
+      Excel已支援目前畫面資料（含財務管理處與 Stage 2A 測試部門）；PDF尚待下一階段更新。
     </p>
   );
 }
@@ -283,8 +284,9 @@ export function BudgetSummaryPreviewClient({
   /** Real, code-addressable departments (Stage 2A's 8 test departments plus
    * 財務管理處) with their own fiscalYear=2027 BudgetVersion/lines, if any -
    * see fetchFinanceVersion.ts#fetchDeptSummaryEntries. Drives every tab's
-   * on-screen figures; the Excel/PDF export below is unrelated and still
-   * reads financeVersion (財務管理處 only) directly. */
+   * on-screen figures; the Excel export (see ExportButtons above) now reads
+   * this exact same query server-side, so the two can never disagree. PDF
+   * still reads financeVersion (財務管理處 only) directly - not extended yet. */
   deptEntries: DeptSummaryEntry[];
 }) {
   const [tab, setTab] = useState<TabKey>("unit");

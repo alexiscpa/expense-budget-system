@@ -183,7 +183,13 @@ export type RawCell =
   | { kind: "text"; value: string; align?: "left" | "right" }
   | { kind: "amount"; value: Decimal | null }
   | { kind: "count"; value: number | null }
-  | { kind: "growth"; value: Decimal | null };
+  | { kind: "growth"; value: Decimal | null }
+  // A real Excel/JS Date value - never a pre-formatted string - so the
+  // Excel writer can apply a genuine date cell format (yyyy.mm.dd) instead
+  // of writing a text cell that merely looks like a date. Excel-only for
+  // now (the old single-department builders below never produce this kind,
+  // and the PDF builder has no notion of a "real" date cell to begin with).
+  | { kind: "date"; value: Date | null };
 
 export interface RawRow {
   cells: RawCell[];
@@ -198,17 +204,20 @@ export interface RawTable {
   rows: RawRow[];
 }
 
-function textCell(value: string, align: "left" | "right" = "left"): RawCell {
+export function textCell(value: string, align: "left" | "right" = "left"): RawCell {
   return { kind: "text", value, align };
 }
-function amountCell(value: Decimal | null): RawCell {
+export function amountCell(value: Decimal | null): RawCell {
   return { kind: "amount", value };
 }
-function countCell(value: number | null): RawCell {
+export function countCell(value: number | null): RawCell {
   return { kind: "count", value };
 }
-function growthCell(value: Decimal | null): RawCell {
+export function growthCell(value: Decimal | null): RawCell {
   return { kind: "growth", value };
+}
+export function dateCell(value: Date | null): RawCell {
+  return { kind: "date", value };
 }
 
 export const UNIT_HEADER_GROUPS = [
