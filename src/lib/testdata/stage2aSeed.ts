@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { CurrentUser } from "@/lib/auth/session";
 import { isTestBypassUser } from "@/lib/auth/testBypass";
@@ -56,6 +56,7 @@ export interface Stage2aSeedResult {
   budgetVersionsCreated: number;
   budgetLinesPlanned: number;
   budgetLinesCreated: number;
+  budgetLinesUnlocked: number;
   departments: Stage2aDepartmentSummary[];
 }
 
@@ -100,10 +101,18 @@ export interface Stage2aSeedResult {
  * handful of statements regardless of the ~476 budget lines involved, with
  * no interactive-transaction timeout to exceed and no per-row round trip
  * (avoiding the Neon P2028 failure mode). `skipDuplicates: true` on every
- * createMany makes re-running this endpoint fully idempotent - already
- * existing rows are left untouched, never re-created or overwritten - and
- * because every id/code here is scoped to STAGE2A_DEPARTMENTS'/
- * STAGE2A_ACCOUNTS' own codes, this never reads or writes anything
+ * createMany makes re-running this endpoint fully idempotent for rows that
+ * do not exist yet - but a row that already exists (e.g. an environment
+ * seeded before the entryTypeSnapshot override above was introduced) is
+ * left completely untouched by createMany/skipDuplicates, so re-running
+ * this function alone would NOT retroactively unlock an already-existing
+ * environment's old FORMULA/NOT_CONFIGURED/isLocked lines. The
+ * `unlockLegacyFormulaLinesQuery` raw SQL statement below exists
+ * specifically to upgrade those - see its own comment for exactly what it
+ * does and does not touch. Because every id/code here is scoped to
+ * STAGE2A_DEPARTMENTS'/STAGE2A_ACCOUNTS' own codes, and the upgrade query
+ * additionally filters on both BudgetVersion.isTestData AND
+ * Department.isTestData, none of this ever reads or writes anything
  * belonging to 財務管理處 (17203) or any other real department.
  */
 export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSeedResult> {
@@ -258,6 +267,54 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     });
   }
 
+  const stage2aVersionIds = versionRows.map((v) => v.id);
+
+  // Upgrade path for an environment seeded before the entryTypeSnapshot
+  // override above existed (e.g. Preview, already stress-seeded once): a
+  // line that createMany/skipDuplicates left alone because it already
+  // exists can still be sitting in the OLD locked state
+  // (entryTypeSnapshot='FORMULA', formulaStatus='NOT_CONFIGURED',
+  // isLocked=true) from before this fix. That old state is only ever
+  // produced by this seed's own (pre-fix) FORMULA branch - a genuinely
+  // real department's own createBudgetVersionDraft-created NOT_CONFIGURED
+  // lines are excluded here by requiring BOTH bv."isTestData" AND
+  // d."isTestData", and are further narrowed to just this run's own
+  // deterministic version ids - so this can never touch 財務管理處 or any
+  // other real department's legitimately-unconfigured formula lines.
+  //
+  // Deliberately a raw UPDATE naming only these three columns: it does NOT
+  // go through Prisma's `update`/`updateMany`, so BudgetLine.updatedAt
+  // (which Prisma's `@updatedAt` would otherwise silently bump on any
+  // `.update()` call) is left completely untouched - critical, since
+  // `updatedAt === createdAt` is exactly how the summary report
+  // (lineIsTouched in multiDepartmentSummary.ts) and the budget page
+  // (isUntouched in BudgetVersionClient.tsx) tell "never entered by a
+  // user" apart from "confirmed 0"; bumping it here would wrongly make an
+  // untouched line look touched and show a fabricated 0 instead of "—".
+  // A line that is still locked can never have real
+  // nextYearTargetExcludingNew/nextYearNewHireBudget/justification from a
+  // user in the first place (updateDepartmentInputLine rejects any write
+  // while isLocked is true - see lib/budget/lineService.ts), so unlocking
+  // it here cannot discard real user input. BudgetVersion.status is never
+  // referenced or written by this query, so an already-SUBMITTED/APPROVED
+  // test version is never reverted to DRAFT. Naturally idempotent: once a
+  // line has been upgraded its formulaStatus is no longer 'NOT_CONFIGURED',
+  // so a later re-run's WHERE clause simply matches nothing for it.
+  const unlockLegacyFormulaLinesQuery = prisma.$executeRaw`
+    UPDATE "BudgetLine" AS bl
+    SET "entryTypeSnapshot" = 'DEPARTMENT_INPUT'::"AccountEntryType",
+        "formulaStatus" = 'NOT_APPLICABLE'::"FormulaStatus",
+        "isLocked" = false
+    FROM "BudgetVersion" AS bv
+    JOIN "Department" AS d ON d."id" = bv."departmentId"
+    WHERE bl."budgetVersionId" = bv."id"
+      AND bv."id" IN (${Prisma.join(stage2aVersionIds)})
+      AND bv."isTestData" = true
+      AND d."isTestData" = true
+      AND bl."entryTypeSnapshot" = 'FORMULA'::"AccountEntryType"
+      AND bl."formulaStatus" = 'NOT_CONFIGURED'::"FormulaStatus"
+  `;
+
   const auditLogQuery = prisma.auditLog.create({
     data: buildAuditLogData({
       actorUserId: actor.id,
@@ -272,11 +329,12 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     }),
   });
 
-  const [deptResult, acctResult, versionResult, lineResult] = await prisma.$transaction([
+  const [deptResult, acctResult, versionResult, lineResult, unlockedCount] = await prisma.$transaction([
     prisma.department.createMany({ data: departmentRows, skipDuplicates: true }),
     prisma.account.createMany({ data: accountRows, skipDuplicates: true }),
     prisma.budgetVersion.createMany({ data: versionRows, skipDuplicates: true }),
     prisma.budgetLine.createMany({ data: lineRows, skipDuplicates: true }),
+    unlockLegacyFormulaLinesQuery,
     auditLogQuery,
   ]);
 
@@ -289,6 +347,7 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     budgetVersionsCreated: versionResult.count,
     budgetLinesPlanned: lineRows.length,
     budgetLinesCreated: lineResult.count,
+    budgetLinesUnlocked: unlockedCount,
     departments: summaries,
   };
 }

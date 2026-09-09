@@ -473,3 +473,244 @@ describe("Stage 2A - salary/bonus accounts are editable, not locked behind 尚�
     ).rejects.toThrow(ApiError);
   });
 });
+
+describe("Stage 2A - upgrading an environment seeded before the entryTypeSnapshot fix (e.g. Preview)", () => {
+  beforeEach(() => setEnv("preview", "true"));
+
+  it("unlocks an already-existing legacy FORMULA/NOT_CONFIGURED line without discarding real 2027 input, headcount, or a SUBMITTED status", async () => {
+    // 財務管理處's own, unrelated manual test data - must survive completely
+    // untouched, exactly like every other Stage 2A test.
+    const fmoData = await seedFinanceManagementOfficeManualTestData();
+
+    // Hand-build exactly what the OLD (pre-fix) runStage2ATestSeed would
+    // have written for 資訊處 (17103) using the SAME deterministic ids the
+    // real seed uses, so createMany/skipDuplicates sees them as "already
+    // exists" on the next run below - this is what a previously-seeded
+    // Preview environment actually looks like on disk.
+    const deptId = "stage2a-dept-17103";
+    const salaryAccountId = "stage2a-acct-6110010";
+    const transitAccountId = "stage2a-acct-6110070";
+    const versionId = "stage2a-ver-17103-2027";
+    const lockedLineId = "stage2a-line-17103-6110010";
+    const editableLineId = "stage2a-line-17103-6110070";
+    const untouchedTimestamp = new Date("2026-01-01T00:00:00.000Z");
+    const enteredTimestamp = new Date("2026-02-15T09:30:00.000Z");
+
+    await prisma.department.create({
+      data: {
+        id: deptId,
+        code: "17103",
+        name: "資訊處",
+        class: "M",
+        isActive: true,
+        isTestData: true,
+        priorYearHeadcount: 11,
+        priorYearReferenceFiscalYear: STAGE2A_PROJECTION_FISCAL_YEAR,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.account.create({
+      data: {
+        id: salaryAccountId,
+        code: "6110010",
+        name: "薪資支出",
+        majorCategory: "M",
+        commonCategory: "PERSONNEL",
+        entryType: "FORMULA",
+        isActive: true,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.account.create({
+      data: {
+        id: transitAccountId,
+        code: "6110070",
+        name: "交通津貼",
+        majorCategory: "M",
+        commonCategory: "PERSONNEL",
+        entryType: "DEPARTMENT_INPUT",
+        isActive: true,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.budgetVersion.create({
+      data: {
+        id: versionId,
+        departmentId: deptId,
+        fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR,
+        versionNumber: 1,
+        status: "SUBMITTED", // already submitted under the old code - must stay SUBMITTED
+        isTestData: true,
+        priorYearHeadcount: 11,
+        budgetYearHeadcount: 11,
+        lastPreparedAt: enteredTimestamp,
+        createdAt: untouchedTimestamp,
+        updatedAt: enteredTimestamp,
+      },
+    });
+    // The old locked FORMULA line - exactly the "尚未設定" state this whole
+    // fix targets. Never touched by a user (createdAt === updatedAt), since
+    // updateDepartmentInputLine rejects any write while isLocked is true.
+    await prisma.budgetLine.create({
+      data: {
+        id: lockedLineId,
+        budgetVersionId: versionId,
+        accountId: salaryAccountId,
+        priorPriorYearActual: 0,
+        priorYearOriginalBudget: 6666200,
+        currentYearProjection: 6666200,
+        projectionIsComplete: true,
+        nextYearTargetExcludingNew: 0,
+        nextYearNewHireBudget: 0,
+        nextYearTotal: 0,
+        entryTypeSnapshot: "FORMULA",
+        formulaStatus: "NOT_CONFIGURED",
+        isLocked: true,
+        justification: null,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    // A real, already-editable line the user genuinely filled in and
+    // submitted before this fix - must be preserved byte-for-byte.
+    await prisma.budgetLine.create({
+      data: {
+        id: editableLineId,
+        budgetVersionId: versionId,
+        accountId: transitAccountId,
+        priorPriorYearActual: 0,
+        priorYearOriginalBudget: 271600,
+        currentYearProjection: 271600,
+        projectionIsComplete: true,
+        nextYearTargetExcludingNew: 300000,
+        nextYearNewHireBudget: 20000,
+        nextYearTotal: 320000,
+        entryTypeSnapshot: "DEPARTMENT_INPUT",
+        formulaStatus: "NOT_APPLICABLE",
+        isLocked: false,
+        justification: "既有真實編列說明，不得被覆蓋",
+        createdAt: untouchedTimestamp,
+        updatedAt: enteredTimestamp,
+      },
+    });
+
+    const result = await runStage2ATestSeed(testBypassUser());
+    expect(result.budgetLinesUnlocked).toBeGreaterThanOrEqual(1);
+
+    const unlockedLine = await prisma.budgetLine.findUniqueOrThrow({ where: { id: lockedLineId } });
+    expect(unlockedLine.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+    expect(unlockedLine.formulaStatus).toBe("NOT_APPLICABLE");
+    expect(unlockedLine.isLocked).toBe(false);
+    // Still "never touched by a user" - the raw SQL upgrade must not bump
+    // updatedAt, or this line would wrongly show a fabricated 2027 amount
+    // instead of "—" in the summary (see lineIsTouched in
+    // multiDepartmentSummary.ts / isUntouched in BudgetVersionClient.tsx).
+    expect(unlockedLine.updatedAt.getTime()).toBe(unlockedLine.createdAt.getTime());
+    expect(unlockedLine.updatedAt.getTime()).toBe(untouchedTimestamp.getTime());
+
+    const preservedLine = await prisma.budgetLine.findUniqueOrThrow({ where: { id: editableLineId } });
+    expect(preservedLine.nextYearTargetExcludingNew.toString()).toBe("300000");
+    expect(preservedLine.nextYearNewHireBudget.toString()).toBe("20000");
+    expect(preservedLine.nextYearTotal.toString()).toBe("320000");
+    expect(preservedLine.justification).toBe("既有真實編列說明，不得被覆蓋");
+    expect(preservedLine.updatedAt.getTime()).toBe(enteredTimestamp.getTime());
+
+    const preservedVersion = await prisma.budgetVersion.findUniqueOrThrow({ where: { id: versionId } });
+    expect(preservedVersion.status).toBe("SUBMITTED"); // never reverted to DRAFT
+    expect(preservedVersion.priorYearHeadcount).toBe(11);
+    expect(preservedVersion.budgetYearHeadcount).toBe(11);
+
+    const preservedDept = await prisma.department.findUniqueOrThrow({ where: { id: deptId } });
+    expect(preservedDept.priorYearHeadcount).toBe(11);
+
+    // 財務管理處's own, unrelated data is completely untouched.
+    const fmoLineAfter = await prisma.budgetLine.findUniqueOrThrow({ where: { id: fmoData.line.id } });
+    expect(fmoLineAfter.nextYearTargetExcludingNew.toString()).toBe("999999");
+    expect(fmoLineAfter.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+    const fmoVersionAfter = await prisma.budgetVersion.findUniqueOrThrow({ where: { id: fmoData.version.id } });
+    expect(fmoVersionAfter.status).toBe("DRAFT");
+  });
+
+  it("re-running the seed again after the upgrade is a true no-op for the already-unlocked line (idempotent)", async () => {
+    const deptId = "stage2a-dept-17103";
+    const versionId = "stage2a-ver-17103-2027";
+    const lockedLineId = "stage2a-line-17103-6110010";
+    const untouchedTimestamp = new Date("2026-01-01T00:00:00.000Z");
+
+    await prisma.department.create({
+      data: {
+        id: deptId,
+        code: "17103",
+        name: "資訊處",
+        class: "M",
+        isActive: true,
+        isTestData: true,
+        priorYearHeadcount: 11,
+        priorYearReferenceFiscalYear: STAGE2A_PROJECTION_FISCAL_YEAR,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.account.create({
+      data: {
+        id: "stage2a-acct-6110010",
+        code: "6110010",
+        name: "薪資支出",
+        majorCategory: "M",
+        commonCategory: "PERSONNEL",
+        entryType: "FORMULA",
+        isActive: true,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.budgetVersion.create({
+      data: {
+        id: versionId,
+        departmentId: deptId,
+        fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR,
+        versionNumber: 1,
+        status: "DRAFT",
+        isTestData: true,
+        priorYearHeadcount: 11,
+        budgetYearHeadcount: 11,
+        lastPreparedAt: untouchedTimestamp,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+    await prisma.budgetLine.create({
+      data: {
+        id: lockedLineId,
+        budgetVersionId: versionId,
+        accountId: "stage2a-acct-6110010",
+        priorPriorYearActual: 0,
+        priorYearOriginalBudget: 6666200,
+        currentYearProjection: 6666200,
+        projectionIsComplete: true,
+        nextYearTargetExcludingNew: 0,
+        nextYearNewHireBudget: 0,
+        nextYearTotal: 0,
+        entryTypeSnapshot: "FORMULA",
+        formulaStatus: "NOT_CONFIGURED",
+        isLocked: true,
+        justification: null,
+        createdAt: untouchedTimestamp,
+        updatedAt: untouchedTimestamp,
+      },
+    });
+
+    const firstRun = await runStage2ATestSeed(testBypassUser());
+    expect(firstRun.budgetLinesUnlocked).toBeGreaterThanOrEqual(1);
+    const afterFirst = await prisma.budgetLine.findUniqueOrThrow({ where: { id: lockedLineId } });
+    expect(afterFirst.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+
+    const secondRun = await runStage2ATestSeed(testBypassUser());
+    expect(secondRun.budgetLinesUnlocked).toBe(0); // nothing left in the old locked state to fix
+    const afterSecond = await prisma.budgetLine.findUniqueOrThrow({ where: { id: lockedLineId } });
+    expect(afterSecond.updatedAt.getTime()).toBe(untouchedTimestamp.getTime());
+  });
+});
