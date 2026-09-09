@@ -73,11 +73,6 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
   });
   if (existing) throw new ApiError(409, "此部門年度預算草稿已存在");
 
-  const accounts = await prisma.account.findMany({ where: { isActive: true } });
-  if (accounts.length === 0) {
-    throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
-  }
-
   // Every "prior-year reference" figure (Department.priorYearHeadcount,
   // Account.priorYearReferenceAmount below) is only ever valid for the
   // fiscal year immediately before the one being drafted - never reused
@@ -97,9 +92,19 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
   // 0/"資料不全，待確認".
   const department = await prisma.department.findUnique({
     where: { id: departmentId },
-    select: { priorYearHeadcount: true, priorYearReferenceFiscalYear: true },
+    select: { class: true, priorYearHeadcount: true, priorYearReferenceFiscalYear: true },
   });
-  const departmentReferenceValid = department?.priorYearReferenceFiscalYear === referenceYear;
+  if (!department) throw new ApiError(404, "找不到此部門");
+
+  // Only accounts belonging to this department's own class (M/S/R/P) are
+  // applicable - a management department must never see production or
+  // sales accounts and vice versa.
+  const accounts = await prisma.account.findMany({ where: { isActive: true, majorCategory: department.class } });
+  if (accounts.length === 0) {
+    throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
+  }
+
+  const departmentReferenceValid = department.priorYearReferenceFiscalYear === referenceYear;
   const priorYearHeadcount = departmentReferenceValid ? (department?.priorYearHeadcount ?? null) : null;
 
   // Set explicitly (rather than relying on @default(now())/@updatedAt at

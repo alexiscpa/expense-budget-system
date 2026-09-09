@@ -221,6 +221,13 @@ model Department {
   // Null means "no confirmed reference year at all".
   priorYearReferenceFiscalYear Int?
 
+  // true only for a department created by the Stage 2A preview-only
+  // stress-seed endpoint (see src/lib/testdata). Never true for a real
+  // department, including 財務管理處 - this is what lets that endpoint be
+  // idempotent and lets any future cleanup tooling distinguish its rows
+  // from real master data.
+  isTestData Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -384,6 +391,11 @@ model BudgetVersion {
   // what was already stored; opening the page, withdrawing a submission, or
   // submitting/resubmitting never touches it.
   lastPreparedAt DateTime
+
+  // true only for a DRAFT version created by the Stage 2A preview-only
+  // stress-seed endpoint. Never true for a real department's budget
+  // version, including 財務管理處's.
+  isTestData Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
