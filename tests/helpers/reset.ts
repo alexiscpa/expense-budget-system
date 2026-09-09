@@ -18,6 +18,7 @@ export async function resetDatabase() {
     prisma.loginAttempt.deleteMany(),
     prisma.userDepartmentScope.deleteMany(),
     prisma.user.deleteMany(),
+    prisma.departmentHeadcount.deleteMany(),
     prisma.department.deleteMany(),
   ]);
 }

@@ -33,3 +33,17 @@ export function getEnv(): Env {
 export function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
 }
+
+/**
+ * True only on a Vercel Preview deployment that has been explicitly
+ * provisioned for open QA testing (AUTH_DISABLED=true set alongside it).
+ * Both flags are read directly from process.env (not the strict envSchema
+ * above) because they are optional and absent in every other environment,
+ * including production - this must default to false, never throw, so a
+ * misconfigured/missing flag can never accidentally enable preview-only
+ * behavior. Gates test-data endpoints such as POST /api/demo/stress-seed;
+ * never use it to bypass authentication or RBAC checks themselves.
+ */
+export function isPreviewStressSeedEnvironment(): boolean {
+  return process.env.VERCEL_ENV === "preview" && process.env.AUTH_DISABLED === "true";
+}

@@ -47,6 +47,15 @@ export default async function BudgetVersionPage({ params }: { params: { id: stri
   });
   if (!version) notFound();
 
+  const [priorYearHeadcount, budgetYearHeadcount] = await Promise.all([
+    prisma.departmentHeadcount.findUnique({
+      where: { departmentId_fiscalYear: { departmentId: version.departmentId, fiscalYear: version.fiscalYear - 1 } },
+    }),
+    prisma.departmentHeadcount.findUnique({
+      where: { departmentId_fiscalYear: { departmentId: version.departmentId, fiscalYear: version.fiscalYear } },
+    }),
+  ]);
+
   const allowed = await canAccessDepartment(user, version.departmentId);
   if (!allowed) {
     return (
@@ -76,6 +85,8 @@ export default async function BudgetVersionPage({ params }: { params: { id: stri
       )}
       canSeeSalary={canSeeSalary}
       availableActions={availableActions}
+      priorYearHeadcount={priorYearHeadcount?.headcount ?? null}
+      budgetYearHeadcount={budgetYearHeadcount?.headcount ?? null}
     />
   );
 }

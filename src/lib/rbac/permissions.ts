@@ -17,6 +17,7 @@ export const ROLE_CAPABILITIES: Record<Role, string[]> = {
     "budget.view_any",
     "audit.view",
     "dual_control.approve",
+    "testdata.stage2a_seed",
   ],
   BUDGET_OWNER: [
     "budget.edit_own_department",

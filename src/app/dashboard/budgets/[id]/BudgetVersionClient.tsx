@@ -50,6 +50,8 @@ export function BudgetVersionClient({
   version,
   canSeeSalary,
   availableActions: roleAvailableActions,
+  priorYearHeadcount,
+  budgetYearHeadcount,
 }: {
   currentUser: { id: string; role: Role; companyWide: boolean };
   version: VersionDto;
@@ -59,6 +61,12 @@ export function BudgetVersionClient({
    * everything regardless - this only keeps the UI from offering an action
    * that would just 403. */
   availableActions: string[];
+  /** Department's headcount for (fiscalYear - 1), e.g. the 2026 projected
+   * headcount shown on a 2027 draft. Null if not yet recorded. */
+  priorYearHeadcount: number | null;
+  /** Department's headcount for this version's own fiscal year (the figure
+   * the department head is filling in). Null until saved once. */
+  budgetYearHeadcount: number | null;
 }) {
   const router = useRouter();
   const [lines, setLines] = useState(version.lines);
@@ -66,9 +74,26 @@ export function BudgetVersionClient({
   const [error, setError] = useState<string | null>(null);
   const [reasonPrompt, setReasonPrompt] = useState<null | "return" | "reject" | "adjustment">(null);
   const [reasonText, setReasonText] = useState("");
+  const [headcountInput, setHeadcountInput] = useState(budgetYearHeadcount?.toString() ?? "");
 
   const editable = ["DRAFT", "RETURNED", "ADJUSTMENT_PENDING"].includes(version.status);
   const hasUnconfiguredFormula = lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
+
+  async function saveHeadcount() {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/api/departments/${version.departmentId}/headcount`, {
+        method: "PATCH",
+        body: JSON.stringify({ fiscalYear: version.fiscalYear, headcount: Number(headcountInput) }),
+      });
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof ClientApiError ? err.message : "更新人數失敗");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveLine(line: LineDto, excludingNew: string, newHire: string) {
     setBusy(true);
@@ -125,6 +150,29 @@ export function BudgetVersionClient({
         {version.department.name} — {version.fiscalYear} 年度預算（v{version.versionNumber}）
       </h1>
       <p className="mb-4 text-sm text-slate-500">狀態：{version.status}</p>
+
+      <div className="mb-4 flex flex-wrap items-end gap-4 rounded border border-slate-200 p-3 text-sm">
+        <div>
+          <span className="text-slate-500">{version.fiscalYear - 1} 年推估人數：</span>
+          <span className="font-medium">{priorYearHeadcount ?? "尚無資料"}</span>
+        </div>
+        <label className="flex items-center gap-2">
+          <span className="text-slate-500">{version.fiscalYear} 年預算人數：</span>
+          {editable ? (
+            <>
+              <input
+                className="w-20 rounded border border-slate-300 px-1"
+                value={headcountInput}
+                onChange={(e) => setHeadcountInput(e.target.value)}
+                onBlur={saveHeadcount}
+                disabled={busy}
+              />
+            </>
+          ) : (
+            <span className="font-medium">{budgetYearHeadcount ?? "-"}</span>
+          )}
+        </label>
+      </div>
 
       {version.returnReason && (
         <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">

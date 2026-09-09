@@ -195,21 +195,51 @@ model LoginAttempt {
 // ---------------------------------------------------------------------------
 
 model Department {
-  id        String    @id @default(cuid())
-  code      String    @unique
-  name      String
-  class     DeptClass
-  isActive  Boolean   @default(true)
-  notes     String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id         String    @id @default(cuid())
+  code       String    @unique
+  name       String
+  class      DeptClass
+  isActive   Boolean   @default(true)
+  notes      String?
+  // true only for departments created by the preview-only stress-seed
+  // endpoint (see src/lib/testdata). Never set true for real departments -
+  // this flag is what lets the stress-seed be idempotent and lets cleanup
+  // tooling distinguish test rows from the Finance Management Office and any
+  // other real department data.
+  isTestData Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   userScopes     UserDepartmentScope[]
   budgetVersions BudgetVersion[]
   salaryDataRows SalaryDataSource[]
   memoryEntries  MemoryEntry[]
+  headcountPlans DepartmentHeadcount[]
 
   @@index([class])
+}
+
+// Projected/budgeted headcount for a department in a given fiscal year.
+// Deliberately its own table (not a single column on Department) because a
+// department's headcount differs by year and must never overwrite another
+// year's value: departmentId+fiscalYear uniquely identifies one row, so a
+// 2026 projection and a later 2027 budget headcount coexist independently.
+model DepartmentHeadcount {
+  id           String   @id @default(cuid())
+  departmentId String
+  fiscalYear   Int
+  headcount    Int
+  // e.g. "STAGE2A_TEST_SEED_2026_PROJECTION", "USER_INPUT" - free text
+  // provenance marker, not an enum, since new sources will be added over
+  // time without needing a schema change.
+  sourceType   String
+  isTestData   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  @@unique([departmentId, fiscalYear])
 }
 
 model Account {
@@ -301,6 +331,11 @@ model BudgetVersion {
   rejectReason    String?
 
   adjustmentReason String?
+
+  // true only for DRAFT versions created by the preview-only stress-seed
+  // endpoint for the Stage 2A test departments. Never true for a real
+  // department's budget version.
+  isTestData Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

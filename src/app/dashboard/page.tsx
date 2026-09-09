@@ -3,7 +3,9 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
 import { getAccessibleDepartmentIds, hasCapability } from "@/lib/rbac/permissions";
+import { isPreviewStressSeedEnvironment } from "@/lib/env";
 import { CreateDraftForm } from "./CreateDraftForm";
+import { Stage2ASeedButton } from "./Stage2ASeedButton";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +49,10 @@ export default async function DashboardPage() {
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
       <h1 className="mb-6 text-xl font-bold">預算版本總覽</h1>
+
+      {isPreviewStressSeedEnvironment() && hasCapability(user.role, "testdata.stage2a_seed") && (
+        <Stage2ASeedButton />
+      )}
 
       {canCreateDraft && <CreateDraftForm departments={creatableDepartments} />}
 

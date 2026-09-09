@@ -19,6 +19,11 @@ export const createDraftSchema = z.object({
   fiscalYear: z.number().int().min(2000).max(2100),
 });
 
+export const updateHeadcountSchema = z.object({
+  fiscalYear: z.number().int().min(2000).max(2100),
+  headcount: z.number().int().min(0).max(9999),
+});
+
 export const updateLineSchema = z.object({
   nextYearTargetExcludingNew: z.string().regex(/^\d+(\.\d{1,2})?$/, "請輸入正確的金額格式"),
   nextYearNewHireBudget: z.string().regex(/^\d+(\.\d{1,2})?$/, "請輸入正確的金額格式"),
