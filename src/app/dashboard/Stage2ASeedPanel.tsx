@@ -19,6 +19,10 @@ interface SeedResult {
   accountsCreated: number;
   budgetVersionsCreated: number;
   budgetLinesCreated: number;
+  budgetLinesInspected: number;
+  budgetLinesUnlocked: number;
+  remainingLockedLines: number;
+  remainingUnconfiguredFormulaLines: number;
   departments: DepartmentSummary[];
 }
 
@@ -44,6 +48,12 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [departments, setDepartments] = useState<DepartmentSummary[] | null>(initialStatus);
+  const [lastRunDiagnostics, setLastRunDiagnostics] = useState<{
+    budgetLinesInspected: number;
+    budgetLinesUnlocked: number;
+    remainingLockedLines: number;
+    remainingUnconfiguredFormulaLines: number;
+  } | null>(null);
 
   async function handleConfirm() {
     if (!window.confirm(CONFIRM_MESSAGE)) {
@@ -55,8 +65,19 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
     try {
       const res = await apiFetch<{ result: SeedResult }>("/api/demo/stage2a-seed", { method: "POST" });
       setDepartments(res.result.departments);
+      setLastRunDiagnostics({
+        budgetLinesInspected: res.result.budgetLinesInspected,
+        budgetLinesUnlocked: res.result.budgetLinesUnlocked,
+        remainingLockedLines: res.result.remainingLockedLines,
+        remainingUnconfiguredFormulaLines: res.result.remainingUnconfiguredFormulaLines,
+      });
       router.refresh();
     } catch (err) {
+      // A remainingLockedLines/remainingUnconfiguredFormulaLines > 0
+      // failure (see runStage2ATestSeed) lands here as an ApiError whose
+      // message already lists the exact affected department/account codes
+      // - never silently treated as success.
+      setLastRunDiagnostics(null);
       setError(err instanceof ClientApiError ? err.message : "建立測試資料失敗");
     } finally {
       setBusy(false);
@@ -97,6 +118,14 @@ export function Stage2ASeedPanel({ initialStatus }: { initialStatus: DepartmentS
       )}
 
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+
+      {lastRunDiagnostics && (
+        <p className="mt-2 text-xs text-sky-800">
+          本次檢查 {lastRunDiagnostics.budgetLinesInspected} 筆科目，解鎖 {lastRunDiagnostics.budgetLinesUnlocked} 筆舊版鎖定科目；
+          剩餘鎖定科目 {lastRunDiagnostics.remainingLockedLines} 筆、公式尚未設定科目 {lastRunDiagnostics.remainingUnconfiguredFormulaLines}{" "}
+          筆（皆應為 0）。
+        </p>
+      )}
 
       {departments && (
         <div className="mt-3 overflow-x-auto rounded bg-white p-3 text-xs text-slate-700">

@@ -56,7 +56,10 @@ export interface Stage2aSeedResult {
   budgetVersionsCreated: number;
   budgetLinesPlanned: number;
   budgetLinesCreated: number;
+  budgetLinesInspected: number;
   budgetLinesUnlocked: number;
+  remainingLockedLines: number;
+  remainingUnconfiguredFormulaLines: number;
   departments: Stage2aDepartmentSummary[];
 }
 
@@ -267,20 +270,28 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     });
   }
 
-  const stage2aVersionIds = versionRows.map((v) => v.id);
+  const stage2aVersionIds = STAGE2A_DEPARTMENTS.map((d) => versionId(d.code));
 
   // Upgrade path for an environment seeded before the entryTypeSnapshot
   // override above existed (e.g. Preview, already stress-seeded once): a
   // line that createMany/skipDuplicates left alone because it already
-  // exists can still be sitting in the OLD locked state
-  // (entryTypeSnapshot='FORMULA', formulaStatus='NOT_CONFIGURED',
-  // isLocked=true) from before this fix. That old state is only ever
-  // produced by this seed's own (pre-fix) FORMULA branch - a genuinely
-  // real department's own createBudgetVersionDraft-created NOT_CONFIGURED
-  // lines are excluded here by requiring BOTH bv."isTestData" AND
-  // d."isTestData", and are further narrowed to just this run's own
-  // deterministic version ids - so this can never touch 財務管理處 or any
-  // other real department's legitimately-unconfigured formula lines.
+  // exists can still be sitting in some OLD locked state from before this
+  // fix. Deliberately matches on entryTypeSnapshot='FORMULA' ALONE (not
+  // also requiring formulaStatus='NOT_CONFIGURED'/isLocked=true, as an
+  // earlier version of this query did) - post-fix, no Stage 2A line should
+  // EVER be snapshotted as FORMULA (see the entryTypeSnapshot override
+  // above), so any line still carrying that value is, by definition, a
+  // leftover from a prior code version, regardless of exactly which
+  // formulaStatus/isLocked combination that prior version happened to
+  // write (NOT_CONFIGURED, a stale CONFIGURED, or anything else) - one
+  // broad condition on the single invariant that is actually guaranteed,
+  // rather than an exact-match on values that could vary across the
+  // history of this seed. A genuinely real department's own
+  // createBudgetVersionDraft-created NOT_CONFIGURED lines are excluded
+  // here by requiring BOTH bv."isTestData" AND d."isTestData", and are
+  // further narrowed to just this run's own deterministic version ids -
+  // so this can never touch 財務管理處 or any other real department's
+  // legitimately-unconfigured formula lines.
   //
   // Deliberately a raw UPDATE naming only these three columns: it does NOT
   // go through Prisma's `update`/`updateMany`, so BudgetLine.updatedAt
@@ -298,8 +309,8 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
   // it here cannot discard real user input. BudgetVersion.status is never
   // referenced or written by this query, so an already-SUBMITTED/APPROVED
   // test version is never reverted to DRAFT. Naturally idempotent: once a
-  // line has been upgraded its formulaStatus is no longer 'NOT_CONFIGURED',
-  // so a later re-run's WHERE clause simply matches nothing for it.
+  // line has been upgraded its entryTypeSnapshot is no longer FORMULA, so
+  // a later re-run's WHERE clause simply matches nothing for it.
   const unlockLegacyFormulaLinesQuery = prisma.$executeRaw`
     UPDATE "BudgetLine" AS bl
     SET "entryTypeSnapshot" = 'DEPARTMENT_INPUT'::"AccountEntryType",
@@ -312,7 +323,6 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
       AND bv."isTestData" = true
       AND d."isTestData" = true
       AND bl."entryTypeSnapshot" = 'FORMULA'::"AccountEntryType"
-      AND bl."formulaStatus" = 'NOT_CONFIGURED'::"FormulaStatus"
   `;
 
   const auditLogQuery = prisma.auditLog.create({
@@ -338,6 +348,34 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     auditLogQuery,
   ]);
 
+  // Read-your-own-write verification, independent of the UPDATE's own row
+  // count: re-query the same 8 departments' lines from scratch and confirm
+  // none of them are still locked behind a formula. This is deliberately
+  // NOT trusted to the transaction above succeeding "in principle" - if any
+  // line here is still entryTypeSnapshot=FORMULA or formulaStatus=
+  // NOT_CONFIGURED, this function throws rather than returning a success
+  // shape, so the API (see api/demo/stage2a-seed/route.ts) can never report
+  // "初始化成功" while a real department preparer would still see 尚未設定.
+  const residualLines = await prisma.budgetLine.findMany({
+    where: {
+      budgetVersionId: { in: stage2aVersionIds },
+      budgetVersion: { isTestData: true },
+      OR: [{ entryTypeSnapshot: "FORMULA" }, { formulaStatus: "NOT_CONFIGURED" }],
+    },
+    include: { account: true, budgetVersion: { include: { department: true } } },
+  });
+  const remainingLockedLines = residualLines.filter((l) => l.entryTypeSnapshot === "FORMULA").length;
+  const remainingUnconfiguredFormulaLines = residualLines.filter((l) => l.formulaStatus === "NOT_CONFIGURED").length;
+  const budgetLinesInspected = await prisma.budgetLine.count({ where: { budgetVersionId: { in: stage2aVersionIds } } });
+
+  if (remainingLockedLines > 0 || remainingUnconfiguredFormulaLines > 0) {
+    const codes = residualLines.map((l) => `${l.budgetVersion.department.code}/${l.account.code}`).join("、");
+    throw new ApiError(
+      500,
+      `Stage 2A 測試資料初始化未完全成功：仍有 ${residualLines.length} 筆科目維持鎖定或公式未設定狀態（尚未設定），不得視為成功。受影響科目（部門代碼/科目代碼）：${codes}`
+    );
+  }
+
   return {
     departmentsPlanned: departmentRows.length,
     departmentsCreated: deptResult.count,
@@ -347,7 +385,10 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     budgetVersionsCreated: versionResult.count,
     budgetLinesPlanned: lineRows.length,
     budgetLinesCreated: lineResult.count,
+    budgetLinesInspected,
     budgetLinesUnlocked: unlockedCount,
+    remainingLockedLines,
+    remainingUnconfiguredFormulaLines,
     departments: summaries,
   };
 }

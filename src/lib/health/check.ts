@@ -6,6 +6,13 @@ export interface HealthResult {
   database: "ok" | "unreachable";
   dbLatencyMs: number | null;
   timestamp: string;
+  // Vercel injects this automatically for every deployment (build-time env,
+  // not a secret - it is the public commit SHA already visible in the repo
+  // and in the GitHub PR's own deployment status). Lets anyone confirm
+  // which commit is actually live on a given URL without needing local git
+  // access - see the PR body/report for why this matters after a fix
+  // depends on a specific commit being deployed.
+  deployedCommit: string | null;
 }
 
 /**
@@ -32,5 +39,6 @@ export async function checkHealth(client: Pick<PrismaClient, "$queryRaw">): Prom
     database: dbOk ? "ok" : "unreachable",
     dbLatencyMs,
     timestamp: new Date().toISOString(),
+    deployedCommit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
   };
 }

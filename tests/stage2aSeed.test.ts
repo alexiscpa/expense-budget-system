@@ -713,4 +713,172 @@ describe("Stage 2A - upgrading an environment seeded before the entryTypeSnapsho
     const afterSecond = await prisma.budgetLine.findUniqueOrThrow({ where: { id: lockedLineId } });
     expect(afterSecond.updatedAt.getTime()).toBe(untouchedTimestamp.getTime());
   });
+
+  it("fixes EVERY historical formulaStatus/isLocked combination that a still-FORMULA line might carry, not just the exact FORMULA/NOT_CONFIGURED/true triple", async () => {
+    // Different Stage 2A departments/accounts, each hand-built into a
+    // different legacy combination that still has entryTypeSnapshot=
+    // FORMULA - the one thing this seed's fixed code guarantees never
+    // happens on a Stage 2A line, and therefore the only condition the
+    // upgrade query actually needs to match on (see its own comment).
+    const legacyCombinations: Array<{
+      deptCode: string;
+      accountCode: string;
+      formulaStatus: "NOT_CONFIGURED" | "CONFIGURED" | "NOT_APPLICABLE";
+      isLocked: boolean;
+    }> = [
+      { deptCode: "17103", accountCode: "6110010", formulaStatus: "NOT_CONFIGURED", isLocked: true }, // the "expected" old shape
+      { deptCode: "17303", accountCode: "6110030", formulaStatus: "CONFIGURED", isLocked: true }, // a stale "was once configured" value
+      { deptCode: "12111", accountCode: "6210010", formulaStatus: "NOT_APPLICABLE", isLocked: true }, // formulaStatus already "fixed" but isLocked/entryTypeSnapshot were not
+    ];
+    const untouchedTimestamp = new Date("2026-01-01T00:00:00.000Z");
+
+    for (const combo of legacyCombinations) {
+      const deptId = `stage2a-dept-${combo.deptCode}`;
+      const accountId = `stage2a-acct-${combo.accountCode}`;
+      const versionId = `stage2a-ver-${combo.deptCode}-2027`;
+      const lineId = `stage2a-line-${combo.deptCode}-${combo.accountCode}`;
+      const dept = STAGE2A_DEPARTMENTS.find((d) => d.code === combo.deptCode)!;
+      const account = STAGE2A_ACCOUNTS.find((a) => a.code === combo.accountCode)!;
+
+      await prisma.department.upsert({
+        where: { id: deptId },
+        create: {
+          id: deptId,
+          code: dept.code,
+          name: dept.name,
+          class: dept.class,
+          isActive: true,
+          isTestData: true,
+          priorYearHeadcount: 10,
+          priorYearReferenceFiscalYear: STAGE2A_PROJECTION_FISCAL_YEAR,
+          createdAt: untouchedTimestamp,
+          updatedAt: untouchedTimestamp,
+        },
+        update: {},
+      });
+      await prisma.account.upsert({
+        where: { id: accountId },
+        create: {
+          id: accountId,
+          code: account.code,
+          name: account.name,
+          majorCategory: account.majorCategory,
+          commonCategory: account.commonCategory,
+          entryType: "FORMULA",
+          isActive: true,
+          createdAt: untouchedTimestamp,
+          updatedAt: untouchedTimestamp,
+        },
+        update: {},
+      });
+      await prisma.budgetVersion.upsert({
+        where: { id: versionId },
+        create: {
+          id: versionId,
+          departmentId: deptId,
+          fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR,
+          versionNumber: 1,
+          status: "DRAFT",
+          isTestData: true,
+          priorYearHeadcount: 10,
+          budgetYearHeadcount: 10,
+          lastPreparedAt: untouchedTimestamp,
+          createdAt: untouchedTimestamp,
+          updatedAt: untouchedTimestamp,
+        },
+        update: {},
+      });
+      await prisma.budgetLine.create({
+        data: {
+          id: lineId,
+          budgetVersionId: versionId,
+          accountId,
+          priorPriorYearActual: 0,
+          priorYearOriginalBudget: 1000000,
+          currentYearProjection: 1000000,
+          projectionIsComplete: true,
+          nextYearTargetExcludingNew: 0,
+          nextYearNewHireBudget: 0,
+          nextYearTotal: 0,
+          entryTypeSnapshot: "FORMULA",
+          formulaStatus: combo.formulaStatus,
+          isLocked: combo.isLocked,
+          justification: null,
+          createdAt: untouchedTimestamp,
+          updatedAt: untouchedTimestamp,
+        },
+      });
+    }
+
+    const result = await runStage2ATestSeed(testBypassUser());
+    expect(result.remainingLockedLines).toBe(0);
+    expect(result.remainingUnconfiguredFormulaLines).toBe(0);
+    expect(result.budgetLinesUnlocked).toBeGreaterThanOrEqual(legacyCombinations.length);
+
+    for (const combo of legacyCombinations) {
+      const line = await prisma.budgetLine.findUniqueOrThrow({
+        where: { id: `stage2a-line-${combo.deptCode}-${combo.accountCode}` },
+      });
+      expect(line.entryTypeSnapshot).toBe("DEPARTMENT_INPUT");
+      expect(line.formulaStatus).toBe("NOT_APPLICABLE");
+      expect(line.isLocked).toBe(false);
+    }
+  });
+
+  it("after a fresh seed, none of the 8 departments' 2027 versions has any line the frontend would render as 尚未設定 or block submission for", async () => {
+    const result = await runStage2ATestSeed(testBypassUser());
+    expect(result.remainingLockedLines).toBe(0);
+    expect(result.remainingUnconfiguredFormulaLines).toBe(0);
+    expect(result.budgetLinesInspected).toBe(result.budgetLinesCreated);
+
+    const versions = await prisma.budgetVersion.findMany({
+      where: { isTestData: true },
+      include: { lines: true },
+    });
+    expect(versions).toHaveLength(8);
+    for (const version of versions) {
+      // Exactly the two predicates the frontend actually uses (see
+      // BudgetVersionClient.tsx: `line.formulaStatus === "NOT_CONFIGURED"`
+      // drives both the per-line "尚未設定" text and the
+      // `hasUnconfiguredFormula` top-of-page warning banner; `line.isLocked`
+      // combined with `editable` drives whether an input renders at all)
+      // must both be false for every Stage 2A line.
+      const hasUnconfiguredFormula = version.lines.some((l) => l.formulaStatus === "NOT_CONFIGURED");
+      expect(hasUnconfiguredFormula).toBe(false);
+      const hasStillLockedFormulaLine = version.lines.some((l) => l.entryTypeSnapshot === "FORMULA");
+      expect(hasStillLockedFormulaLine).toBe(false);
+    }
+  });
+
+  it("throws (never reports success) when a residual locked/unconfigured line survives the fix, and names the exact department/account", async () => {
+    await runStage2ATestSeed(testBypassUser());
+
+    // Manufacture a data anomaly the broadened FORMULA-only match cannot
+    // catch by construction: entryTypeSnapshot already looks fixed
+    // (DEPARTMENT_INPUT) but formulaStatus is still the old NOT_CONFIGURED
+    // value - i.e. exactly the "已被部分修改但前端仍判定為公式的列" case.
+    // The independent post-fix verification query matches on
+    // formulaStatus='NOT_CONFIGURED' too (not just entryTypeSnapshot), so
+    // this must still be caught and must fail loudly rather than silently
+    // reporting success.
+    const dept = await prisma.department.findUniqueOrThrow({ where: { code: "16124" } }); // 生產部
+    const version = await prisma.budgetVersion.findFirstOrThrow({
+      where: { departmentId: dept.id, fiscalYear: STAGE2A_BUDGET_FISCAL_YEAR },
+    });
+    const anyLine = await prisma.budgetLine.findFirstOrThrow({ where: { budgetVersionId: version.id } });
+    await prisma.budgetLine.update({
+      where: { id: anyLine.id },
+      data: { entryTypeSnapshot: "DEPARTMENT_INPUT", formulaStatus: "NOT_CONFIGURED", isLocked: false },
+    });
+
+    await expect(runStage2ATestSeed(testBypassUser())).rejects.toThrow(ApiError);
+    try {
+      await runStage2ATestSeed(testBypassUser());
+      expect.unreachable("must throw, never resolve, while a residual line exists");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).message).toContain("16124");
+      expect((err as ApiError).message).toContain("尚未設定");
+    }
+  });
 });
