@@ -39,7 +39,7 @@ departmentCode,workbookName,normalizedName,category,domesticOrOverseas,dispositi
 "12401","營業企劃處","營業企劃處","S","domestic","PARENT_ONLY",,,"","false","false","false","false","上層彙總單位，下屬12411成品企劃部及12421客戶服務部分別編製預算。"
 "12411","成品企劃部","成品企劃部","S","domestic","BUDGET_OWNER","12401",,"銷-營業促進成品企劃","true","true","false","false",
 "12421","客戶服務部","客戶服務部","S","domestic","BUDGET_OWNER","12401",,"銷-營業促進客戶服務","true","true","false","false",
-"12501","教研營業處","教研營業處","S","domestic","PARENT_ONLY",,,"","false","false","false","false","人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。"
+"12501","教研營業處","教研營業處","S","domestic","INACTIVE",,,"","false","false","false","false","人工決定刪除／停用，不建立預算輸入表、不顯示於可選部門、不建立BudgetVersion、不列入預算進度分母。"
 "13001","第二營業本部","第二營業本部","S","domestic","PARENT_ONLY",,,"","false","false","false","false","人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。"
 "13101","南亞暨ODM營業處","南亞暨ODM營業處","S","domestic","PARENT_ONLY","13001",,"","false","false","false","false",
 "13111","ODM營業部","ODM營業部","S","domestic","BUDGET_OWNER","13101",,"銷-南亞ODM營業","true","true","false","false",

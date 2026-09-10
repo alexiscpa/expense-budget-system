@@ -909,7 +909,7 @@
     "normalizedName": "教研營業處",
     "category": "S",
     "domesticOrOverseas": "domestic",
-    "disposition": "PARENT_ONLY",
+    "disposition": "INACTIVE",
     "rollupParentCode": null,
     "mergedIntoCode": null,
     "sourceSheets": [],
@@ -919,7 +919,7 @@
     "hasDedicatedDetailSheet": false,
     "appearsInSummarySheet": false,
     "evidence": "No 2025 rollup formula or dedicated sheet anywhere, but 3 hits in ALLINONE/CUBE_ALLINONE confirm real historical ledger activity under this code. Not marked '(無)' in ERP部門 (unlike 12141/12231/12331), which makes its complete absence from the 2025 budget structure ambiguous - possibly folded into another department's 2025 figures, possibly simply not yet budgeted for 2025.",
-    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
+    "exclusionReason": "人工決定刪除／停用，不建立預算輸入表、不顯示於可選部門、不建立BudgetVersion、不列入預算進度分母。",
     "isStage2ATestDepartment": false,
     "isExistingRealDepartment": false
   },
