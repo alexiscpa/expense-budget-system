@@ -187,6 +187,11 @@ export async function runStage2ATestSeed(actor: CurrentUser): Promise<Stage2aSee
     entryType: a.entryType,
     formulaKey: a.formulaKey,
     isActive: true,
+    // Explicit (not just relying on the schema default) - this is the
+    // canonical, all-four-class Stage 2B chart (see
+    // src/lib/budget/accountSelection.ts's doc comment), never the
+    // separate FINANCE_DEMO chart seedDemoMasterData.ts imports for 17203.
+    catalog: "OFFICIAL",
     // Deliberately left null - see this function's own doc comment above
     // for why the shared, single-value Account reference fields must never
     // carry one test department's amount for an account other departments

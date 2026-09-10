@@ -148,11 +148,19 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
         'DEPARTMENT_INPUT'::"AccountEntryType", true, false,
         ${item.seq}, ${demoSourceRef(item.seq)}, ${item.priorYearReferenceAmount}::numeric,
         ${DEMO_PRIOR_REFERENCE_FISCAL_YEAR},
+        'FINANCE_DEMO'::"AccountCatalog",
         now(), now()
       )`
     )
   );
 
+  // "catalog" = 'FINANCE_DEMO' explicitly on every row this seed writes -
+  // never left at the column default ('OFFICIAL') - so
+  // getBudgetAccountsForDepartment (lib/budget/accountSelection.ts) never
+  // selects these accounts for a NEW BudgetVersion draft. See
+  // prisma/schema.prisma's AccountCatalog doc comment: this demo chart is
+  // a separate, one-off 62-item M-class import for 17203's own manual
+  // walkthrough, not the canonical Stage 2B chart.
   const accountUpsertQuery = prisma.$queryRaw<AccountUpsertRow[]>`
     INSERT INTO "Account" (
       "id", "code", "name",
@@ -160,6 +168,7 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
       "entryType", "isActive", "isProvisionalCode",
       "sourceSeq", "sourceRef", "priorYearReferenceAmount",
       "priorYearReferenceFiscalYear",
+      "catalog",
       "createdAt", "updatedAt"
     )
     VALUES ${accountValueRows}
@@ -175,6 +184,7 @@ export async function seedDemoMasterData(actorUserId: string | null): Promise<De
       "sourceRef" = EXCLUDED."sourceRef",
       "priorYearReferenceAmount" = EXCLUDED."priorYearReferenceAmount",
       "priorYearReferenceFiscalYear" = EXCLUDED."priorYearReferenceFiscalYear",
+      "catalog" = 'FINANCE_DEMO'::"AccountCatalog",
       "updatedAt" = now()
     RETURNING "id", "code", "name", "sourceSeq", "priorYearReferenceAmount"
   `;

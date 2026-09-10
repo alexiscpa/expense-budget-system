@@ -8,6 +8,7 @@ import { isEditable } from "@/lib/workflow/stateMachine";
 import { writeAuditLog, buildAuditLogData } from "@/lib/audit/log";
 import { evaluateFormula } from "@/lib/formula/engine";
 import { isTestBypassUser } from "@/lib/auth/testBypass";
+import { getBudgetAccountsForDepartment } from "./accountSelection";
 
 export interface DerivedFields {
   nextYearTotal: Decimal;
@@ -78,6 +79,16 @@ export interface CreateBudgetVersionDraftOptions {
    * row itself - a real department's normal (forceEditable: false, the
    * default) draft still gets genuine FORMULA-locked/NOT_BUDGETED-fixed
    * behavior for the exact same account.
+   *
+   * Deliberately controls ONLY editability, never which accounts get
+   * selected in the first place - account selection is entirely
+   * getBudgetAccountsForDepartment's job (see below) and is identical
+   * regardless of this flag, so a management department always gets
+   * exactly its 62 official accounts whether or not forceEditable is set.
+   * An earlier version of this fix conflated the two (gating an account-
+   * catalog filter on this same flag), which left the false/default path
+   * still able to select 124 M-class accounts - see
+   * src/lib/budget/accountSelection.ts's doc comment.
    */
   forceEditable?: boolean;
 }
@@ -122,27 +133,20 @@ export async function createBudgetVersionDraft(
 
   // Only accounts belonging to this department's own class (M/S/R/P) are
   // applicable - a management department must never see production or
-  // sales accounts and vice versa.
-  //
-  // forceEditable additionally excludes any account carrying a sourceSeq
-  // (Account.sourceSeq IS NOT NULL) - the marker seedDemoMasterData.ts
-  // uses for the SEPARATE, unrelated 62-item M-class-only demo chart it
-  // imports from "2026年度費用預算V2--財務.xlsx" for 17203's own one-off
-  // manual demo walkthrough. That chart happens to duplicate the same 62
-  // M-class concepts already present in the canonical, all-four-class
-  // chart (stage2aAccounts.ts's STAGE2A_ACCOUNTS, sourceSeq always null,
-  // sourced from the SAME 2025費用總表 workbook the Stage 2B-1/2B-2
-  // department manifest itself is built from) - so a plain
-  // majorCategory-only filter silently doubles a Stage 2B-2 M-class
-  // department's applicable-account count to 124 instead of 62 (S/R/P are
-  // unaffected: seedDemoMasterData never imports anything for those
-  // classes). Never applied when forceEditable is false, so 17203's own
-  // real createBudgetVersionDraft path - if ever invoked directly, outside
-  // the Stage 2B-2 roster flow - keeps using its own established sourceSeq
-  // chart untouched.
-  const accounts = await prisma.account.findMany({
-    where: { isActive: true, majorCategory: department.class, ...(forceEditable ? { sourceSeq: null } : {}) },
-  });
+  // sales accounts and vice versa. Selection itself is delegated entirely
+  // to getBudgetAccountsForDepartment (lib/budget/accountSelection.ts) -
+  // the ONLY function in this codebase that decides "which accounts apply
+  // to a new draft for this class" - so that rule cannot drift between
+  // entry points or accidentally depend on forceEditable/isTestData/role.
+  // It always returns AccountCatalog.OFFICIAL accounts only (the
+  // canonical, all-four-class 62/62/62/52 chart), never the separate
+  // FINANCE_DEMO chart (17203's own one-off 62-item manual-demo accounts -
+  // see prisma/schema.prisma's AccountCatalog doc comment for why a plain
+  // majorCategory filter alone would double an M-class department's count
+  // to 124). This selection is unconditional - forceEditable below only
+  // ever controls whether the resulting lines start locked or editable,
+  // never which accounts get selected in the first place.
+  const accounts = await getBudgetAccountsForDepartment({ department });
   if (accounts.length === 0) {
     throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
   }

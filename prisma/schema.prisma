@@ -47,6 +47,30 @@ enum DomesticOverseas {
   OVERSEAS
 }
 
+// Which chart of accounts an Account row belongs to. Exists specifically so
+// account SELECTION (which accounts are "applicable" when a brand-new
+// BudgetVersion draft is created for a department) never has to guess from
+// an incidental field like sourceSeq or from the account name/code shape -
+// see getBudgetAccountsForDepartment in src/lib/budget/accountSelection.ts,
+// the single place every BudgetLine-creating entry point gets its account
+// set from.
+enum AccountCatalog {
+  // The canonical, all-four-class M/S/R/P chart of accounts (62/62/62/52),
+  // sourced from 2025費用總表-第一版(20241122).xlsx - the same workbook the
+  // Stage 2B-1/2B-2 department manifest itself is built from. Used for
+  // EVERY Stage 2B-2 department's new BudgetVersion draft, 17203 財務管理處
+  // included, regardless of forceEditable/isTestData/role/API entry point.
+  OFFICIAL
+  // 17203's own separate, one-off manual-demo chart of accounts (62
+  // M-class-only items, imported from a different, unrelated file -
+  // "2026年度費用預算V2--財務.xlsx" - for a hand-built walkthrough of the
+  // budget screen). Never selected for a NEW draft by
+  // getBudgetAccountsForDepartment; existing historical BudgetLine rows
+  // that already reference a FINANCE_DEMO account are never touched or
+  // migrated - this tag only changes which accounts a NEW draft picks up.
+  FINANCE_DEMO
+}
+
 enum AccountEntryType {
   FORMULA // 公式自動計算
   NOT_BUDGETED // 不編列，固定為 0
@@ -291,6 +315,14 @@ model Account {
   formulaKey     String?
   isActive       Boolean               @default(true)
 
+  // Which chart of accounts this row belongs to - see AccountCatalog's own
+  // doc comment. The explicit, permanent signal for account SELECTION
+  // (never sourceSeq, which only happens to correlate with catalog today
+  // because seedDemoMasterData.ts is currently the only writer of
+  // sourceSeq - see getBudgetAccountsForDepartment in
+  // src/lib/budget/accountSelection.ts).
+  catalog AccountCatalog @default(OFFICIAL)
+
   // True when `code` is a stand-in identifier assigned because the source
   // data (e.g. an imported spreadsheet) had no official chart-of-accounts
   // code yet - never to be presented or relied on as a confirmed official
@@ -329,6 +361,7 @@ model Account {
 
   @@index([majorCategory])
   @@index([entryType])
+  @@index([catalog])
 }
 
 model FormulaDefinition {
