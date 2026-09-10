@@ -816,7 +816,7 @@
     "normalizedName": "海外行銷部",
     "category": "S",
     "domesticOrOverseas": "overseas",
-    "disposition": "PARENT_ONLY",
+    "disposition": "INACTIVE",
     "rollupParentCode": "12301",
     "mergedIntoCode": null,
     "sourceSheets": [
@@ -831,7 +831,7 @@
     "hasDedicatedDetailSheet": true,
     "appearsInSummarySheet": true,
     "evidence": "⚠ CONTRADICTION: ERP部門 marks this '(無)' (nonexistent) and its sheet name carries the '(x)' disable marker, YET its detail sheet '銷-海外行銷(x)' IS still summed live into 營業總計 column E and rolls up into B.營管生產與編制 row5 ('海外行銷企劃', 負責人 林佑城, 2025 figure 1,290,000) - a nonzero, formula-computed 2025 target. Unlike 12141/12231 (whose '(x)'/'(無)' sheets are never referenced by any formula), this one is genuinely live. Human must confirm whether it is being phased out (残留 figures only) or should still be treated as active for 2025/Stage 2B.",
-    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
+    "exclusionReason": "原始 ERP 部門名稱明確標示「無」，不建立預算輸入表，不列入進度分母。",
     "isStage2ATestDepartment": false,
     "isExistingRealDepartment": false
   },
@@ -851,7 +851,7 @@
     "hasDedicatedDetailSheet": false,
     "appearsInSummarySheet": false,
     "evidence": "ZERO occurrences anywhere in the workbook outside its own ERP部門 row - not in any 2025 rollup formula, not even as a coincidental digit-substring in the 56K-row ALLINONE ledger. Children 12411/12421 are each independent BUDGET_OWNER lines in B.營管生產與編制 (rows 25-26) with NO visible '營業企劃處' subtotal row combining them (unlike 12201's analogous case, which DOES have a combined row). Cannot determine from this workbook alone whether 12401 is simply an unused reserved code or a genuine gap.",
-    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
+    "exclusionReason": "上層彙總單位，下屬12411成品企劃部及12421客戶服務部分別編製預算。",
     "isStage2ATestDepartment": false,
     "isExistingRealDepartment": false
   },
@@ -1387,7 +1387,7 @@
     "hasDedicatedDetailSheet": false,
     "appearsInSummarySheet": true,
     "evidence": "B.營管生產與編制 row64 ('台灣廠') = SUM(row60:row63), i.e. 生產(16124)+生技(16114)+資材(16134)+採購(16144). No bare occurrence of the literal code '16104' exists anywhere in the workbook - the rollup is identified purely by row position/name, not by an explicit code cell. NOTE: 16204(品保) is NOT included in this SUM - it is added back separately at row67/68 ('生產費用合計'), i.e. 品保 is structurally a sibling of 台灣廠's own subtotal, not a child of it.",
-    "exclusionReason": null,
+    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
     "isStage2ATestDepartment": false,
     "isExistingRealDepartment": false
   },

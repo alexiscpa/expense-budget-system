@@ -35,8 +35,8 @@ departmentCode,workbookName,normalizedName,category,domesticOrOverseas,dispositi
 "12301","海外營業處","海外營業處","S","overseas","PARENT_ONLY",,,"","false","true","false","false",
 "12311","營業一部","營業一部","S","overseas","BUDGET_OWNER","12301",,"銷-海外營一","true","true","false","false",
 "12321","營業二部","營業二部","S","overseas","BUDGET_OWNER","12301",,"銷-海外營二","true","true","false","false",
-"12331","海外行銷部(無)","海外行銷部","S","overseas","PARENT_ONLY","12301",,"銷-海外行銷(x)","true","true","false","false","人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。"
-"12401","營業企劃處","營業企劃處","S","domestic","PARENT_ONLY",,,"","false","false","false","false","人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。"
+"12331","海外行銷部(無)","海外行銷部","S","overseas","INACTIVE","12301",,"銷-海外行銷(x)","true","true","false","false","原始 ERP 部門名稱明確標示「無」，不建立預算輸入表，不列入進度分母。"
+"12401","營業企劃處","營業企劃處","S","domestic","PARENT_ONLY",,,"","false","false","false","false","上層彙總單位，下屬12411成品企劃部及12421客戶服務部分別編製預算。"
 "12411","成品企劃部","成品企劃部","S","domestic","BUDGET_OWNER","12401",,"銷-營業促進成品企劃","true","true","false","false",
 "12421","客戶服務部","客戶服務部","S","domestic","BUDGET_OWNER","12401",,"銷-營業促進客戶服務","true","true","false","false",
 "12501","教研營業處","教研營業處","S","domestic","PARENT_ONLY",,,"","false","false","false","false","人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。"
@@ -60,7 +60,7 @@ departmentCode,workbookName,normalizedName,category,domesticOrOverseas,dispositi
 "A0004","蘇州廠","蘇州廠","S","overseas","BUDGET_OWNER",,,"銷-GWS","true","true","false","false",
 "A1004","蘇州品保處(無)","蘇州品保處","S","overseas","INACTIVE",,,"","false","false","false","false","Marked '(無)'; literally no trace anywhere in the workbook."
 "16004","生產本部","生產本部","P","domestic","PARENT_ONLY",,,"","false","false","false","false",
-"16104","台灣廠","台灣廠","P","domestic","PARENT_ONLY","16004",,"","false","true","false","false",
+"16104","台灣廠","台灣廠","P","domestic","PARENT_ONLY","16004",,"","false","true","false","false","人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。"
 "16114","生技部","生技部","P","domestic","BUDGET_OWNER","16104",,"生-生技","true","true","false","false",
 "16124","生產部","生產部","P","domestic","BUDGET_OWNER","16104",,"生-生產;銷-生產部","true","true","true","false",
 "16134","資材部","資材部","P","domestic","BUDGET_OWNER","16104",,"生-資材","true","true","false","false",
