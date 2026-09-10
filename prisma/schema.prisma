@@ -38,6 +38,15 @@ enum DeptClass {
   UNCLASSIFIED // 待確認，不計入四大類彙總，僅計入總計
 }
 
+// Domestic vs. overseas site, independent of DeptClass (an overseas unit is
+// still classified S/M/etc per its actual business function - see
+// docs/stage2b1-department-reconciliation.md; this flag exists purely so the
+// distinction can be queried/displayed without re-deriving it from the name).
+enum DomesticOverseas {
+  DOMESTIC
+  OVERSEAS
+}
+
 enum AccountEntryType {
   FORMULA // 公式自動計算
   NOT_BUDGETED // 不編列，固定為 0
@@ -136,18 +145,20 @@ model User {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  departmentScopes     UserDepartmentScope[]
-  preparedVersions     BudgetVersion[]       @relation("PreparedBy")
-  submittedVersions    BudgetVersion[]       @relation("SubmittedBy")
-  reviewedVersions     BudgetVersion[]       @relation("ReviewedBy")
-  approvedVersions     BudgetVersion[]       @relation("ApprovedBy")
-  auditLogs            AuditLog[]
-  memoryEntries        MemoryEntry[]
-  aiConfirmedMemories  MemoryEntry[]         @relation("AiConfirmedBy")
-  importBatches        ImportBatch[]
-  passwordResets       PasswordResetToken[]
-  dualControlRequests  DualControlRequest[]  @relation("DualControlRequestedBy")
-  dualControlApprovals DualControlRequest[]  @relation("DualControlApprovedBy")
+  departmentScopes             UserDepartmentScope[]
+  preparedVersions             BudgetVersion[]       @relation("PreparedBy")
+  submittedVersions            BudgetVersion[]       @relation("SubmittedBy")
+  reviewedVersions             BudgetVersion[]       @relation("ReviewedBy")
+  approvedVersions             BudgetVersion[]       @relation("ApprovedBy")
+  preparationCompletedVersions BudgetVersion[]       @relation("PreparationCompletedBy")
+  inputConfirmedLines          BudgetLine[]          @relation("BudgetLineInputConfirmedBy")
+  auditLogs                    AuditLog[]
+  memoryEntries                MemoryEntry[]
+  aiConfirmedMemories          MemoryEntry[]         @relation("AiConfirmedBy")
+  importBatches                ImportBatch[]
+  passwordResets               PasswordResetToken[]
+  dualControlRequests          DualControlRequest[]  @relation("DualControlRequestedBy")
+  dualControlApprovals         DualControlRequest[]  @relation("DualControlApprovedBy")
 
   @@index([role])
 }
@@ -227,6 +238,37 @@ model Department {
   // idempotent and lets any future cleanup tooling distinguish its rows
   // from real master data.
   isTestData Boolean @default(false)
+
+  // Domestic vs. overseas site (see DomesticOverseas). Independent of
+  // `class` - an overseas unit is still M/S/R/P per its real business
+  // function (e.g. 20001 GWK and A0004 蘇州廠 are both class S). Sourced
+  // from docs/data/stage2b1-department-manifest.json's domesticOrOverseas
+  // field, never guessed from the name/code.
+  domesticOrOverseas DomesticOverseas @default(DOMESTIC)
+
+  // ERP code of this department's roll-up parent per
+  // docs/data/stage2b1-department-manifest.json's rollupParentCode (e.g.
+  // "17103" 資訊處 rolls up to "17003" 管理本部). Deliberately a plain code
+  // string, not a foreign key to another Department row: most roll-up
+  // parents (PARENT_ONLY in the manifest, e.g. 17003) are never themselves
+  // created as Department rows in this system (they have no budget entry
+  // point), so there is nothing for a real FK to reference. Used only for
+  // read-side aggregation/display; see src/lib/reference/departmentRollups.ts
+  // for the accompanying static code->name lookup. Null means no
+  // intermediate roll-up (the department lists directly under the
+  // company-wide authority table).
+  rollupParentCode String?
+
+  // true for every department created via the Stage 2B-2 full-roster
+  // initializer (src/lib/masterdata/initializeBudgetOwnerDepartments.ts) -
+  // i.e. every row in this table, by construction, since this system never
+  // creates a Department row for a PARENT_ONLY/MERGED/INACTIVE/
+  // NEEDS_CONFIRMATION code (those have no budget entry point). Kept as an
+  // explicit column - rather than "presence in this table implies it" -
+  // so a future stage that DOES need non-owner Department rows (e.g. for
+  // org-chart display) has a real column to flip to false, without a
+  // migration that changes the meaning of every existing row.
+  isBudgetOwner Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -392,6 +434,26 @@ model BudgetVersion {
   // submitting/resubmitting never touches it.
   lastPreparedAt DateTime
 
+  // Set when the preparer explicitly confirms the department headcount
+  // figure (budgetYearHeadcount) via updateBudgetYearHeadcount - never set
+  // by seed/migration/import. Null means the current budgetYearHeadcount
+  // (even if non-zero, e.g. seeded from Department.priorYearHeadcount) is
+  // only a starting reference, not a user-confirmed value. Mirrors
+  // BudgetLine.inputConfirmedAt's role for the per-line amount fields.
+  headcountConfirmedAt DateTime?
+
+  // Set only when the preparer explicitly runs "完成編製" (complete
+  // preparation) and it passes the completeness gate (see
+  // completePreparation in src/lib/budget/lineService.ts) - never inferred
+  // from status alone. Distinguishes READY_TO_SUBMIT (this set, status
+  // still DRAFT) from an ordinary in-progress DRAFT. Cleared on
+  // withdraw/return per the documented reopen rules (see
+  // completePreparation/reopenPreparation) - never left stale once content
+  // changes again.
+  preparationCompletedAt   DateTime?
+  preparationCompletedById String?
+  preparationCompletedBy   User?     @relation("PreparationCompletedBy", fields: [preparationCompletedById], references: [id])
+
   // true only for a DRAFT version created by the Stage 2A preview-only
   // stress-seed endpoint. Never true for a real department's budget
   // version, including 財務管理處's.
@@ -439,6 +501,21 @@ model BudgetLine {
   // updateDepartmentInputLine); never auto-filled from any import.
   justification String?
 
+  // Explicit "the preparer actually entered/confirmed this line" marker -
+  // the authoritative signal for progress tracking, replacing the old
+  // createdAt===updatedAt heuristic (see docs/stage2b1-department-
+  // reconciliation.md §7.2 for why that heuristic is unreliable: any batch
+  // UPDATE that happens to touch updatedAt would misclassify an untouched
+  // seeded row as "entered"). Set only inside updateDepartmentInputLine,
+  // only when hasContentChanged is true - never by seed, migration, or any
+  // batch-fix script. Null means untouched (whether the stored amount is
+  // 0 from @default(0) or otherwise); non-null (with inputConfirmedById)
+  // means the user explicitly entered/confirmed this line, including an
+  // explicit 0.
+  inputConfirmedAt   DateTime?
+  inputConfirmedById String?
+  inputConfirmedBy   User?     @relation("BudgetLineInputConfirmedBy", fields: [inputConfirmedById], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -448,6 +525,7 @@ model BudgetLine {
 
   @@unique([budgetVersionId, accountId])
   @@index([formulaStatus])
+  @@index([inputConfirmedAt])
 }
 
 model BudgetLineMonthlyActual {

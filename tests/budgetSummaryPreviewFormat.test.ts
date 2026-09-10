@@ -92,7 +92,7 @@ describe("budget summary preview - representative department data", () => {
     expect(names(rd.departments)).toEqual(expect.arrayContaining(["研發一部", "研發二部", "電源研發部", "量測研發部", "研發工程部"]));
     const sales = UNIT_BLOCKS.find((b) => b.key === "sales")!;
     expect(names(sales.departments)).toEqual(
-      expect.arrayContaining(["第一營業本部", "台北", "台中", "高雄", "行銷技術", "行銷支援", "系統整合"])
+      expect.arrayContaining(["第一營業本部", "台北", "台中", "高雄", "行銷技術", "行銷支援部", "系統整合部"])
     );
     const admin = UNIT_BLOCKS.find((b) => b.key === "admin")!;
     expect(names(admin.departments)).toEqual(

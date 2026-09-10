@@ -1,18 +1,20 @@
+import type { DeptClass } from "@prisma/client";
 import { DEMO_DEPARTMENT_CODE, DEMO_DEPARTMENT_NAME } from "@/lib/demo/constants";
+import { BUDGET_OWNER_ROSTER } from "@/lib/masterdata/budgetOwnerRoster";
 
 /**
- * Static, hand-typed data for the multi-department budget summary preview
- * (`/dashboard/reports/budget-summary-preview`).
- *
- * Most names below are still *representative* placeholders used purely to
- * show the table shape - no real Department row exists for them, and they
- * always render "—", never a fabricated amount (see
- * lib/reports/summaryFormat.ts). A name that also carries a `code` is a
- * REAL, code-addressable department (財務管理處, and Stage 2A's 8 test
- * departments) - the preview looks those up live by code (see
- * fetchFinanceVersion.ts#fetchDeptSummaryEntries) and renders their actual
- * fiscalYear=2027 BudgetVersion/lines when one exists, entirely independent
- * of whether every other name in the same block still has no code at all.
+ * Data for the multi-department budget summary preview
+ * (`/dashboard/reports/budget-summary-preview`), sourced from the 45
+ * Stage 2B-2 BUDGET_OWNER_ROSTER (docs/data/stage2b1-department-
+ * manifest.json filtered to disposition === "BUDGET_OWNER") instead of a
+ * hand-typed placeholder list - see Stage 2B-2 §七 "現有網頁彙總表與Excel
+ * 匯出資料來源改為完整45個部門". Every department below is now real and
+ * code-addressable: the preview looks each one up live by code (see
+ * fetchFinanceVersion.ts#fetchDeptSummaryEntries) and renders its actual
+ * fiscalYear=2027 BudgetVersion/lines when one exists, or "—"/"尚未編製"
+ * when it does not (see lib/reports/summaryFormat.ts) - never a fabricated
+ * amount for a department that has not started or confirmed its 2027
+ * figures yet.
  */
 
 /**
@@ -51,25 +53,6 @@ export interface UnitBlockDepartment {
   code?: string;
 }
 
-/**
- * 海外歸類規則: every overseas/offshore unit is filed under 營業單位 in this
- * preview, per instruction - never its own block. GWK is Stage 2A's real
- * overseas test department (code 20001); the rest remain representative
- * placeholders until real departments for them exist.
- */
-export const OVERSEAS_UNIT_NAMES: readonly UnitBlockDepartment[] = [
-  { name: "GWK", code: "20001" },
-  { name: "GWH" },
-  { name: "GWSEA" },
-  { name: "GWS" },
-  { name: "GWA" },
-  { name: "GWI" },
-  { name: "TEXIO" },
-  { name: "大陸環測" },
-  { name: "蘇州廠" },
-  { name: "其他海外單位" },
-] as const;
-
 export interface UnitBlock {
   key: "rd" | "sales" | "admin" | "production";
   title: string;
@@ -77,64 +60,59 @@ export interface UnitBlock {
   departments: readonly UnitBlockDepartment[];
 }
 
-export const UNIT_BLOCKS: readonly UnitBlock[] = [
-  {
-    key: "rd",
-    title: "一、研發事業單位",
-    departments: [
-      { name: "研發一部", code: "11322" },
-      { name: "研發二部" },
-      { name: "電源研發部", code: "11122" },
-      { name: "量測研發部" },
-      { name: "研發工程部" },
-    ],
-  },
-  {
-    key: "sales",
-    title: "二、營業單位（包含海外單位）",
-    departments: [
-      { name: "第一營業本部" },
-      { name: "台北", code: "12111" },
-      { name: "台中" },
-      { name: "高雄" },
-      { name: "行銷技術" },
-      { name: "行銷支援" },
-      { name: "系統整合" },
-      ...OVERSEAS_UNIT_NAMES,
-    ],
-  },
-  {
-    key: "admin",
-    title: "三、管理單位",
-    departments: [
-      { name: "董事長室" },
-      { name: "稽核室" },
-      { name: "經營企劃室" },
-      { name: "勞安室" },
-      { name: "資訊處", code: "17103" },
-      { name: DEMO_DEPARTMENT_NAME, code: DEMO_DEPARTMENT_CODE },
-      { name: "行政管理處", code: "17303" },
-    ],
-  },
-  {
-    key: "production",
-    title: "四、生產單位",
-    departments: [
-      { name: "生產部", code: "16124" },
-      { name: "生技部" },
-      { name: "資材部" },
-      { name: "採購部" },
-      { name: "台灣廠品保處", code: "16204" },
-    ],
-  },
-] as const;
+const BLOCK_CLASS: Record<UnitBlock["key"], DeptClass> = { rd: "R", sales: "S", admin: "M", production: "P" };
 
-/** Every code-addressable department across all four blocks, for the
- * single multi-department fetch behind the preview (see
+function rosterDepartmentsForClass(cls: DeptClass): UnitBlockDepartment[] {
+  // financeDepartmentName/Code (17203) is folded in via the roster itself
+  // (it is one of the 45 BUDGET_OWNER entries) - kept aliased to
+  // DEMO_DEPARTMENT_NAME/CODE below only for the one existing consumer
+  // (summaryReportData.ts's single-department 財務管理處 report) that
+  // still looks it up by that specific constant name.
+  return BUDGET_OWNER_ROSTER.filter((r) => r.class === cls).map((r) => ({ name: r.name, code: r.code }));
+}
+
+export const UNIT_BLOCKS: readonly UnitBlock[] = (
+  [
+    { key: "rd", title: "一、研發事業單位" },
+    { key: "sales", title: "二、營業單位（包含海外單位）" },
+    { key: "admin", title: "三、管理單位" },
+    { key: "production", title: "四、生產單位" },
+  ] as const
+).map((block) => ({ ...block, departments: rosterDepartmentsForClass(BLOCK_CLASS[block.key]) }));
+
+/**
+ * 海外歸類規則: every overseas unit is filed under 營業單位 (sales, class S)
+ * above, never its own block - this is now a direct consequence of the
+ * roster's own domesticOrOverseas flag (all class-S overseas entries),
+ * rather than a separately maintained name list. Kept as its own export
+ * for the one existing consumer that enumerates overseas names specifically
+ * (see tests/budgetSummaryPreviewFormat.test.ts).
+ */
+export const OVERSEAS_UNIT_NAMES: readonly UnitBlockDepartment[] = BUDGET_OWNER_ROSTER.filter(
+  (r) => r.class === "S" && r.domesticOrOverseas === "OVERSEAS"
+).map((r) => ({ name: r.name, code: r.code }));
+
+/** Every code-addressable department across all four blocks (all 45, since
+ * every roster entry is now real and code-addressable), for the single
+ * multi-department fetch behind the preview (see
  * fetchFinanceVersion.ts#fetchDeptSummaryEntries). */
 export const KNOWN_DEPARTMENT_CODES: readonly string[] = UNIT_BLOCKS.flatMap((b) =>
   b.departments.filter((d): d is UnitBlockDepartment & { code: string } => Boolean(d.code)).map((d) => d.code)
 );
+
+// Sanity: DEMO_DEPARTMENT_NAME/CODE (財務管理處/17203) must resolve to the
+// same entry the roster itself carries for that code - if this ever
+// disagrees, the constants in lib/demo/constants.ts and the manifest have
+// drifted apart and every consumer of UNIT_BLOCKS would silently show the
+// wrong name for it.
+if (process.env.NODE_ENV !== "production") {
+  const financeEntry = BUDGET_OWNER_ROSTER.find((r) => r.code === DEMO_DEPARTMENT_CODE);
+  if (!financeEntry || financeEntry.name !== DEMO_DEPARTMENT_NAME) {
+    throw new Error(
+      `budgetSummaryPreviewData: DEMO_DEPARTMENT_CODE/NAME (${DEMO_DEPARTMENT_CODE}/${DEMO_DEPARTMENT_NAME}) does not match BUDGET_OWNER_ROSTER's entry for that code (${financeEntry?.name ?? "not found"})`
+    );
+  }
+}
 
 /** Row labels reserved for Tab 3 (生產科目彙總) - all-dash placeholder rows shown only when no production department has any data yet. */
 export const PRODUCTION_PLACEHOLDER_ROWS = [

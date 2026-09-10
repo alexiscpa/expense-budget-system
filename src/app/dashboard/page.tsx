@@ -11,7 +11,13 @@ import { getStage2ASeedStatus } from "@/lib/testdata/stage2aSeed";
 import { DemoSeedPanel } from "./DemoSeedPanel";
 import { Stage2ASeedPanel } from "./Stage2ASeedPanel";
 import { CreateBudgetVersionForm } from "./CreateBudgetVersionForm";
+import { BudgetOwnerInitPanel } from "./BudgetOwnerInitPanel";
+import { Stage2bProgressSummaryCards } from "./Stage2bProgressSummaryCards";
+import { Stage2bProgressTable } from "./Stage2bProgressTable";
 import { formatTaipeiDate } from "@/lib/format/date";
+import { isVercelProductionEnvironment } from "@/lib/env";
+import { loadStage2bProgress } from "@/lib/reports/stage2bProgress";
+import { BUDGET_OWNER_ROSTER } from "@/lib/masterdata/budgetOwnerRoster";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +62,21 @@ export default async function DashboardPage() {
   const demoSeedStatus = bypassActive ? await getDemoSeedStatus() : null;
   const stage2aSeedStatus = bypassActive ? await getStage2ASeedStatus() : null;
 
+  // 45-department Stage 2B-2 progress: company-wide finance/admin viewers
+  // see every department (summary + full detail table); a department-
+  // scoped user (BUDGET_OWNER/DEPARTMENT_EDITOR/DEPARTMENT_REVIEWER) sees
+  // only the rows for departments they are actually authorized on - never
+  // the company-wide summary numbers, and never another department's row.
+  const canViewAllDepartments = hasCapability(user.role, "budget.view_any") || user.companyWide;
+  const canManageMasterData = hasCapability(user.role, "master_data.import");
+  const canStartPreparation = hasCapability(user.role, "budget.edit_own_department") || isTestBypassUser(user);
+  const { rows: stage2bRows, summary: stage2bSummary } = await loadStage2bProgress();
+  const visibleStage2bRows = canViewAllDepartments
+    ? stage2bRows
+    : stage2bRows.filter((r) => r.departmentId !== null && accessibleDepartmentIds?.includes(r.departmentId));
+  const missingRosterCount = stage2bRows.filter((r) => !r.departmentExists).length;
+  const showMasterDataInitPanel = canManageMasterData && !isVercelProductionEnvironment();
+
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-6 flex items-center justify-between">
@@ -69,6 +90,17 @@ export default async function DashboardPage() {
 
       {bypassActive && <DemoSeedPanel initialStatus={demoSeedStatus} />}
       {bypassActive && <Stage2ASeedPanel initialStatus={stage2aSeedStatus} />}
+
+      {showMasterDataInitPanel && (
+        <BudgetOwnerInitPanel missingCount={missingRosterCount} rosterSize={BUDGET_OWNER_ROSTER.length} />
+      )}
+
+      <section className="mb-10">
+        <h2 className="mb-3 text-lg font-bold">2027年度預算編製進度</h2>
+        {canViewAllDepartments && <Stage2bProgressSummaryCards summary={stage2bSummary} />}
+        <Stage2bProgressTable rows={visibleStage2bRows} canStartPreparation={canStartPreparation} />
+      </section>
+
       {bypassActive && (
         <div className="mb-8 rounded border border-indigo-300 bg-indigo-50 p-4">
           <p className="mb-1 text-sm font-semibold text-indigo-900">費用預算彙總表（版型預覽）</p>
