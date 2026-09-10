@@ -8,6 +8,7 @@ import { isEditable } from "@/lib/workflow/stateMachine";
 import { writeAuditLog, buildAuditLogData } from "@/lib/audit/log";
 import { evaluateFormula } from "@/lib/formula/engine";
 import { isTestBypassUser } from "@/lib/auth/testBypass";
+import { getBudgetAccountsForDepartment } from "./accountSelection";
 
 export interface DerivedFields {
   nextYearTotal: Decimal;
@@ -64,7 +65,41 @@ export function deriveLineTotals(params: {
  * reference it (`entityId`) without needing an interactive step to read the
  * id back first.
  */
-export async function createBudgetVersionDraft(user: CurrentUser, departmentId: string, fiscalYear: number) {
+export interface CreateBudgetVersionDraftOptions {
+  /**
+   * When true, every applicable account's BudgetLine is snapshotted as
+   * editable DEPARTMENT_INPUT/NOT_APPLICABLE/unlocked regardless of the
+   * shared Account row's real entryType/formulaKey - the same override
+   * stage2aSeed.ts uses for its 8 test departments (see that file's doc
+   * comment for the full rationale), extended here to any department. Used
+   * by the Stage 2B-2 45-department roster's lazy "開始編製" draft
+   * creation (see stage2bDraftService.ts), per the explicit requirement
+   * that none of those 45 units' applicable accounts may ever show
+   * 尚未設定/FORMULA鎖定/NOT_BUDGETED鎖定. Never touches the shared Account
+   * row itself - a real department's normal (forceEditable: false, the
+   * default) draft still gets genuine FORMULA-locked/NOT_BUDGETED-fixed
+   * behavior for the exact same account.
+   *
+   * Deliberately controls ONLY editability, never which accounts get
+   * selected in the first place - account selection is entirely
+   * getBudgetAccountsForDepartment's job (see below) and is identical
+   * regardless of this flag, so a management department always gets
+   * exactly its 62 official accounts whether or not forceEditable is set.
+   * An earlier version of this fix conflated the two (gating an account-
+   * catalog filter on this same flag), which left the false/default path
+   * still able to select 124 M-class accounts - see
+   * src/lib/budget/accountSelection.ts's doc comment.
+   */
+  forceEditable?: boolean;
+}
+
+export async function createBudgetVersionDraft(
+  user: CurrentUser,
+  departmentId: string,
+  fiscalYear: number,
+  options: CreateBudgetVersionDraftOptions = {}
+) {
+  const { forceEditable = false } = options;
   await requireCapability(user, "budget.edit_own_department");
   await requireDepartmentAccess(user, departmentId);
 
@@ -72,11 +107,6 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
     where: { departmentId, fiscalYear, versionNumber: 1 },
   });
   if (existing) throw new ApiError(409, "此部門年度預算草稿已存在");
-
-  const accounts = await prisma.account.findMany({ where: { isActive: true } });
-  if (accounts.length === 0) {
-    throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
-  }
 
   // Every "prior-year reference" figure (Department.priorYearHeadcount,
   // Account.priorYearReferenceAmount below) is only ever valid for the
@@ -97,9 +127,31 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
   // 0/"資料不全，待確認".
   const department = await prisma.department.findUnique({
     where: { id: departmentId },
-    select: { priorYearHeadcount: true, priorYearReferenceFiscalYear: true },
+    select: { class: true, priorYearHeadcount: true, priorYearReferenceFiscalYear: true },
   });
-  const departmentReferenceValid = department?.priorYearReferenceFiscalYear === referenceYear;
+  if (!department) throw new ApiError(404, "找不到此部門");
+
+  // Only accounts belonging to this department's own class (M/S/R/P) are
+  // applicable - a management department must never see production or
+  // sales accounts and vice versa. Selection itself is delegated entirely
+  // to getBudgetAccountsForDepartment (lib/budget/accountSelection.ts) -
+  // the ONLY function in this codebase that decides "which accounts apply
+  // to a new draft for this class" - so that rule cannot drift between
+  // entry points or accidentally depend on forceEditable/isTestData/role.
+  // It always returns AccountCatalog.OFFICIAL accounts only (the
+  // canonical, all-four-class 62/62/62/52 chart), never the separate
+  // FINANCE_DEMO chart (17203's own one-off 62-item manual-demo accounts -
+  // see prisma/schema.prisma's AccountCatalog doc comment for why a plain
+  // majorCategory filter alone would double an M-class department's count
+  // to 124). This selection is unconditional - forceEditable below only
+  // ever controls whether the resulting lines start locked or editable,
+  // never which accounts get selected in the first place.
+  const accounts = await getBudgetAccountsForDepartment({ department });
+  if (accounts.length === 0) {
+    throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
+  }
+
+  const departmentReferenceValid = department.priorYearReferenceFiscalYear === referenceYear;
   const priorYearHeadcount = departmentReferenceValid ? (department?.priorYearHeadcount ?? null) : null;
 
   // Set explicitly (rather than relying on @default(now())/@updatedAt at
@@ -116,9 +168,10 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
   for (const account of accounts) {
     let formulaStatus: "NOT_APPLICABLE" | "CONFIGURED" | "NOT_CONFIGURED" = "NOT_APPLICABLE";
     let excludingNew = new Decimal(0);
-    const isLocked = account.entryType !== "DEPARTMENT_INPUT";
+    let isLocked = account.entryType !== "DEPARTMENT_INPUT";
+    let entryTypeSnapshot: (typeof account)["entryType"] = account.entryType;
 
-    if (account.entryType === "FORMULA") {
+    if (!forceEditable && account.entryType === "FORMULA") {
       if (!account.formulaKey) {
         formulaStatus = "NOT_CONFIGURED";
       } else {
@@ -128,6 +181,23 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
           excludingNew = result.amount;
         }
       }
+    }
+
+    if (forceEditable) {
+      // See CreateBudgetVersionDraftOptions.forceEditable's doc comment -
+      // no FormulaDefinition/SalaryDataSource is ever seeded for a
+      // Stage 2B-2 department at this stage, so a real FORMULA evaluation
+      // would resolve NOT_CONFIGURED and permanently lock the field; a
+      // NOT_BUDGETED account would stay fixed at 0 with no input at all.
+      // Both are correct for a fully-configured real department but wrong
+      // here. Overrides all three of entryTypeSnapshot/formulaStatus/
+      // isLocked - not just the two that actually gate editability - to
+      // exactly match stage2aSeed.ts's own override, so the screen never
+      // shows a misleading "公式"/"不編列" label next to a line it is
+      // simultaneously letting the user type into.
+      entryTypeSnapshot = "DEPARTMENT_INPUT";
+      formulaStatus = "NOT_APPLICABLE";
+      isLocked = false;
     }
 
     // When the account carries a known prior-year reference amount (set
@@ -162,7 +232,7 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
       nextYearTotal: derived.nextYearTotal,
       growthRateExcludingNew: derived.growthRateExcludingNew,
       growthRateIncludingNew: derived.growthRateIncludingNew,
-      entryTypeSnapshot: account.entryType,
+      entryTypeSnapshot,
       formulaStatus,
       isLocked,
       createdAt,
@@ -211,7 +281,7 @@ export async function createBudgetVersionDraft(user: CurrentUser, departmentId: 
       action: "BUDGET_VERSION_CREATED",
       entityType: "BudgetVersion",
       entityId: versionId,
-      afterData: { departmentId, fiscalYear },
+      afterData: { departmentId, fiscalYear, forceEditable },
     }),
   });
 
@@ -284,6 +354,13 @@ export async function updateDepartmentInputLine(
       !newHire.equals(line.nextYearNewHireBudget) ||
       (justification !== undefined && justification !== line.justification);
 
+    // TEST_BYPASS_USER is never written to the User table (see
+    // lib/auth/testBypass.ts) - inputConfirmedById is a real foreign key,
+    // so its sentinel id must never be written into it (mirrors
+    // preparedById/submittedById elsewhere).
+    const confirmingUserId = isTestBypassUser(user) ? null : user.id;
+    const confirmedAt = new Date();
+
     const updated = await tx.budgetLine.update({
       where: { id: lineId },
       data: {
@@ -293,11 +370,40 @@ export async function updateDepartmentInputLine(
         growthRateExcludingNew: derived.growthRateExcludingNew,
         growthRateIncludingNew: derived.growthRateIncludingNew,
         justification,
+        // Set unconditionally on every successful save reaching this
+        // point - not gated on hasContentChanged. This function is only
+        // ever invoked by a genuine user save action (never by seed,
+        // migration, or any batch-fix script - see schema.prisma's doc
+        // comment on inputConfirmedAt), so "the user submitted this form"
+        // is itself the confirmation, independent of whether the value
+        // happens to equal what was already stored. This is deliberate:
+        // an untouched line's amount already defaults to 0 at the DB
+        // layer, so a user explicitly entering "0" would otherwise compare
+        // equal to the existing value and never get marked confirmed under
+        // a change-gated rule - exactly the "使用者輸入0元必須被視為使用者
+        // 已確認的有效值" requirement this field exists to satisfy.
+        inputConfirmedAt: confirmedAt,
+        inputConfirmedById: confirmingUserId,
       },
     });
 
     if (hasContentChanged) {
-      await tx.budgetVersion.update({ where: { id: versionId }, data: { lastPreparedAt: new Date() } });
+      await tx.budgetVersion.update({
+        where: { id: versionId },
+        data: {
+          lastPreparedAt: confirmedAt,
+          // A version previously marked "完成編製" (preparationCompletedAt)
+          // is no longer accurate the moment any line's content actually
+          // changes - clear both fields so the derived progress status
+          // drops back out of READY_TO_SUBMIT until the preparer re-runs
+          // completePreparation. Only cleared on a REAL content change
+          // (hasContentChanged), never on a no-op re-save, so re-opening
+          // and re-saving an unchanged value does not spuriously undo a
+          // completed mark.
+          preparationCompletedAt: null,
+          preparationCompletedById: null,
+        },
+      });
     }
 
     await writeAuditLog(
@@ -310,12 +416,76 @@ export async function updateDepartmentInputLine(
           nextYearTargetExcludingNew: line.nextYearTargetExcludingNew.toString(),
           nextYearNewHireBudget: line.nextYearNewHireBudget.toString(),
           justification: line.justification,
+          inputConfirmedAt: line.inputConfirmedAt?.toISOString() ?? null,
         },
         afterData: {
           nextYearTargetExcludingNew: updated.nextYearTargetExcludingNew.toString(),
           nextYearNewHireBudget: updated.nextYearNewHireBudget.toString(),
           justification: updated.justification,
+          inputConfirmedAt: updated.inputConfirmedAt?.toISOString() ?? null,
         },
+      },
+      tx as Prisma.TransactionClient
+    );
+
+    return updated;
+  });
+}
+
+/**
+ * "完成編製" (complete preparation): the preparer explicitly marks this
+ * DRAFT/RETURNED/ADJUSTMENT_PENDING version as ready to submit, provided
+ * every editable line has actually been confirmed (inputConfirmedAt set -
+ * a locked/non-editable line, e.g. FORMULA/NOT_BUDGETED, is exempt since
+ * the preparer was never shown an input for it) and the department
+ * headcount has been confirmed too. This is the ONLY place
+ * preparationCompletedAt/preparationCompletedById are ever set - never by
+ * seed, migration, or implicitly from status alone - so
+ * READY_TO_SUBMIT (status still DRAFT, this field set) is a real,
+ * human-asserted milestone, not a guess.
+ *
+ * See updateDepartmentInputLine/updateBudgetYearHeadcount for where this
+ * mark gets cleared again the moment real content changes after being set.
+ */
+export async function completePreparation(user: CurrentUser, versionId: string) {
+  await requireCapability(user, "budget.edit_own_department");
+
+  return prisma.$transaction(async (tx) => {
+    const version = await tx.budgetVersion.findUnique({ where: { id: versionId }, include: { lines: true } });
+    if (!version) throw new ApiError(404, "找不到此預算版本");
+    await requireDepartmentAccess(user, version.departmentId);
+
+    if (!isEditable(version.status)) {
+      throw new ApiError(409, "此預算版本目前狀態不允許執行「完成編製」");
+    }
+
+    if (version.headcountConfirmedAt === null) {
+      throw new ApiError(422, "部門人數尚未確認，請先於畫面確認 2026 年度部門人數後再完成編製");
+    }
+
+    const unconfirmedEditableLines = version.lines.filter((l) => !l.isLocked && l.inputConfirmedAt === null);
+    if (unconfirmedEditableLines.length > 0) {
+      throw new ApiError(
+        422,
+        `尚有 ${unconfirmedEditableLines.length} 個科目尚未輸入或確認金額，無法完成編製；請先逐一填寫或明確輸入 0 元後再試`
+      );
+    }
+
+    const confirmingUserId = isTestBypassUser(user) ? null : user.id;
+    const now = new Date();
+    const updated = await tx.budgetVersion.update({
+      where: { id: versionId },
+      data: { preparationCompletedAt: now, preparationCompletedById: confirmingUserId },
+    });
+
+    await writeAuditLog(
+      {
+        actorUserId: user.id,
+        action: "BUDGET_PREPARATION_COMPLETED",
+        entityType: "BudgetVersion",
+        entityId: versionId,
+        beforeData: { preparationCompletedAt: null },
+        afterData: { preparationCompletedAt: updated.preparationCompletedAt?.toISOString() ?? null },
       },
       tx as Prisma.TransactionClient
     );

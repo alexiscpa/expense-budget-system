@@ -2,6 +2,10 @@ import Link from "next/link";
 import { isAuthBypassEnabled } from "@/lib/env";
 import { LoginForm } from "./LoginForm";
 
+// Renders a different screen entirely depending on the request-time
+// isAuthBypassEnabled() check - never a candidate for static generation.
+export const dynamic = "force-dynamic";
+
 export default function LoginPage() {
   // Test-only bypass: show a clear notice instead of the credential form.
   // See lib/env.ts#isAuthBypassEnabled for the fail-closed, Preview-only

@@ -37,4 +37,20 @@ describe("health check", () => {
       await brokenClient.$disconnect();
     }
   }, 15000);
+
+  it("reports the deployed commit from Vercel's own VERCEL_GIT_COMMIT_SHA env var, so a deployment's actual commit can be confirmed without local git access", async () => {
+    const original = process.env.VERCEL_GIT_COMMIT_SHA;
+    try {
+      process.env.VERCEL_GIT_COMMIT_SHA = "abc123deadbeef";
+      const result = await checkHealth(prisma);
+      expect(result.deployedCommit).toBe("abc123deadbeef");
+
+      delete process.env.VERCEL_GIT_COMMIT_SHA;
+      const resultWithoutEnv = await checkHealth(prisma);
+      expect(resultWithoutEnv.deployedCommit).toBeNull();
+    } finally {
+      if (original === undefined) delete process.env.VERCEL_GIT_COMMIT_SHA;
+      else process.env.VERCEL_GIT_COMMIT_SHA = original;
+    }
+  });
 });

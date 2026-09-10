@@ -1,0 +1,1531 @@
+[
+  {
+    "departmentCode": "11002",
+    "workbookName": "研發事業本部",
+    "normalizedName": "研發事業本部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A7"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-1 '事業本部' label in ERP部門 row7. Zero occurrences anywhere else in the workbook (no column header code, no formula reference, no ledger hit in ALLINONE/CUBE_ALLINONE). 2024組織圖 groups 11012/11022/11102/11202/11302/11402 visually under this heading, but no cell computes a rollup keyed to code 11002 itself.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11012",
+    "workbookName": "研發二部",
+    "normalizedName": "研發二部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "11002",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-研二"
+    ],
+    "sourceCells": [
+      "事業總計!C3=11012",
+      "事業總計!C6=研-研二!C8",
+      "A.事業費用與編制!row5 (研二-示波器)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-研二!C3 self-declares department 11012 via VLOOKUP(C3,ERP部門!A:B,2,FALSE)->'研發二部'. 事業總計 column C is headed by code 11012 (row3) and every account-line formula in that column points at '研-研二' (e.g. row6 薪資支出 = '研-研二'!C8). A.事業費用與編制 row5 pulls its 2025 figures from 事業總計!*5, labeling the line '研二-示波器' (product-line nickname, not the ERP name).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11022",
+    "workbookName": "工設機構部",
+    "normalizedName": "工設機構部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-工設"
+    ],
+    "sourceCells": [
+      "事業總計!H3=11022",
+      "事業總計!H6=研-工設!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-工設!C3 self-declares 11022. 事業總計 column H (row3=11022) sums every line from '研-工設'. A.事業費用與編制 row10 ('工設') = 事業總計!H5 etc.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11102",
+    "workbookName": "電源研發事業處",
+    "normalizedName": "電源研發事業處",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": "11002",
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A10"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-2 '事業處' label. Zero occurrences outside ERP部門. Its children (11112/11122/11132) are the real cost lines - see below.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11112",
+    "workbookName": "電源一部(2024/5停用)",
+    "normalizedName": "電源一部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "MERGED",
+    "rollupParentCode": null,
+    "mergedIntoCode": "11122",
+    "sourceSheets": [
+      "研-電一(電研X)"
+    ],
+    "sourceCells": [
+      "ERP部門!A11,C11=\"2024合併到11122\"",
+      "研-電一(電研X)!C3=11112"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": false,
+    "evidence": "ERP部門 row11 note column literally states '2024合併到11122'. Its own detail sheet '研-電一(電研X)' still exists and self-declares 11112 (VLOOKUP), but the sheet name carries an 'X' disable marker and NO 2025 rollup formula anywhere (事業總計/A.事業費用與編制) references '研-電一(電研X)' - only '研-電二(電研)' (11122) and '研-電軟' (11132) feed the 2025 column. Confirms the merge is real and already reflected in the 2025 budget structure, not merely a planned future change.",
+    "exclusionReason": "Superseded by 11122 per ERP部門's own note; retained here only for completeness of the reconciliation, not as a Stage 2B budgeting unit.",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11122",
+    "workbookName": "電源研發部",
+    "normalizedName": "電源研發部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "11102",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-電二(電研)"
+    ],
+    "sourceCells": [
+      "事業總計!E3=\"11122/11132\"",
+      "事業總計!E6='研-電二(電研)'!C8+'研-電軟'!C8",
+      "A.事業費用與編制!row7 (電源事業處)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-電二(電研)!C3 self-declares 11122 (~2024 電源二部 per ERP部門 note). ⚠ MERGE FLAG: 事業總計's own column header for this code-pair is the literal string '11122/11132' (row3), and EVERY formula in that column sums '研-電二(電研)' + '研-電軟' together (e.g. 薪資支出 = C8 of each, summed). A.事業費用與編制's 2025 budgeting row 7 ('電源事業處', 負責人 莊耀全) is a SINGLE combined line for both codes - there is no separate 2025 headcount/budget row for 11122 alone in the authoritative A-sheet. See the dedicated merge analysis in the report body (§ merge case 1) - this is a decision for the user, not resolved here.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11132",
+    "workbookName": "電源軟體",
+    "normalizedName": "電源軟體",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "11102",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-電軟"
+    ],
+    "sourceCells": [
+      "事業總計!E3=\"11122/11132\"",
+      "事業總計!E6=...+'研-電軟'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-電軟!C3 self-declares 11132. Has its own full account-level detail sheet (own 薪資支出/獎金/etc. rows, independent of 11122's). Same merge flag as 11122 - see merge case 1 in the report. Also happens to be the sheet a stray 'template' clone ('管銷研-樣版') was last saved from (leftover code 11132 in that template's row3), which is unrelated noise, not evidence of anything about 11132 itself.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11202",
+    "workbookName": "量測研發事業處",
+    "normalizedName": "量測研發事業處",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": "11002",
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A14"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-2 '事業處' label, zero occurrences beyond ERP部門. Children 11212/11222 are the real cost lines.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11212",
+    "workbookName": "量測研發部",
+    "normalizedName": "量測研發部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "11202",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-量測"
+    ],
+    "sourceCells": [
+      "事業總計!F3=11212",
+      "事業總計!F6='研-量測'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-量測!C3 self-declares 11212. 事業總計 column F headed by 11212, every line formula points at '研-量測'.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11222",
+    "workbookName": "研發工程部",
+    "normalizedName": "研發工程部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-工程"
+    ],
+    "sourceCells": [
+      "事業總計!G3=11222",
+      "事業總計!G6='研-工程'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-工程!C3 self-declares 11222. 事業總計 column G headed by 11222.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11302",
+    "workbookName": "通用儀器研發事業處",
+    "normalizedName": "通用儀器研發事業處",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": "11002",
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A17",
+      "2024組織圖!row11 (label only)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-2 '事業處' label. Appears as a grouping label in 2024組織圖 (row11, spanning 11322/11012's org-chart rows) and has real historical ledger rows in ALLINONE/CUBE_ALLINONE, but has NO column of its own in 事業總計/A.事業費用與編制 - child 11322 is the real 2025 cost line.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11322",
+    "workbookName": "研發一部",
+    "normalizedName": "研發一部",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "11302",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-研一"
+    ],
+    "sourceCells": [
+      "事業總計!D3=11322",
+      "事業總計!D6='研-研一'!C8",
+      "A.事業費用與編制!row6 (研一)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-研一!C3 self-declares 11322. 事業總計 column D headed by 11322. Already Stage 2A's own test department for this code - unaffected, see §6.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "11402",
+    "workbookName": "事業投資發展處",
+    "normalizedName": "事業投資發展處",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-事業發展"
+    ],
+    "sourceCells": [
+      "事業總計!J3=11402",
+      "事業總計!J6='研-事業發展'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "研-事業發展!C3 self-declares 11402. 事業總計 column J headed by 11402 and pulls from '研-事業發展'. NOTE: this is a naming counter-example to rule #2 - the ERP name ends in '處' (usually a parent tier in this workbook) yet it is a genuine leaf BUDGET_OWNER with its own detail sheet.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13231",
+    "workbookName": "研發部",
+    "normalizedName": "研發部（安防事業處）",
+    "category": "R",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "13201",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "研-安防"
+    ],
+    "sourceCells": [
+      "事業總計!I3=13231",
+      "事業總計!I6='研-安防'!C8",
+      "A.事業費用與編制!row9 (安防-研發)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ CROSS-CATEGORY EXCEPTION: ERP code 13231 falls in the 13xxx numeric block used elsewhere exclusively for Sales-tier codes (安防事業處 13201/13211/13221/13231), but 研-安防!C3 self-declares 13231 and its cost is aggregated into 事業總計 (the R&D total), column I, labeled '安防-研發' in A.事業費用與編制 row9 - i.e. it is budgeted as R&D, not Sales, despite its code number. This is exactly the kind of case rule #2 warns against guessing from naming/numbering.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "10003",
+    "workbookName": "董事長室",
+    "normalizedName": "董事長室",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-董事長室"
+    ],
+    "sourceCells": [
+      "行政總計!E3=10003",
+      "行政總計!E6='管-董事長室'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-董事長室!C3 self-declares 10003. 行政總計 column E headed by 10003.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "10103",
+    "workbookName": "稽核室",
+    "normalizedName": "稽核室",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-稽核室"
+    ],
+    "sourceCells": [
+      "行政總計!G3=10103",
+      "行政總計!G6='管-稽核室'!D8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-稽核室!C3 self-declares 10103. 行政總計 column G headed by 10103.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "10203",
+    "workbookName": "經營企劃室",
+    "normalizedName": "經營企劃室",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-經營企劃"
+    ],
+    "sourceCells": [
+      "行政總計!F3=10203",
+      "行政總計!F6='管-經營企劃'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-經營企劃!C3 self-declares 10203. 行政總計 column F headed by 10203.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "10303",
+    "workbookName": "勞安室",
+    "normalizedName": "勞安室",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-勞安室"
+    ],
+    "sourceCells": [
+      "行政總計!I3=10303",
+      "行政總計!I6='管-勞安室'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-勞安室!C3 self-declares 10303. 行政總計 column I headed by 10303.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "17003",
+    "workbookName": "管理本部",
+    "normalizedName": "管理本部",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A56"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-1 '本部' label for the whole Admin/M category. Zero occurrences anywhere outside ERP部門 - 行政總計/B.營管生產與編制 both go straight from the 7 individual M departments to '管理合計'/'管理費用總計' with no intermediate '管理本部' column.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "17103",
+    "workbookName": "資訊處",
+    "normalizedName": "資訊處",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-資訊"
+    ],
+    "sourceCells": [
+      "行政總計!H3=17103",
+      "行政總計!H6='管-資訊'!C8",
+      "管-資訊!C3=17103"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-資訊!C3 self-declares 17103 (VLOOKUP -> '資訊處'). Already one of Stage 2A's 8 test departments - see §6.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "17203",
+    "workbookName": "財務管理處",
+    "normalizedName": "財務管理處",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-財務"
+    ],
+    "sourceCells": [
+      "行政總計!D3=17203",
+      "行政總計!D6='管-財務'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-財務!C3 self-declares 17203. This is the app's existing real (non-test) DEMO_DEPARTMENT_CODE - see §6.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": true
+  },
+  {
+    "departmentCode": "17303",
+    "workbookName": "行政管理處",
+    "normalizedName": "行政管理處",
+    "category": "M",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "17003",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "管-行政"
+    ],
+    "sourceCells": [
+      "行政總計!C3=17303",
+      "行政總計!C6='管-行政'!C8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "管-行政!C3 self-declares 17303. Already one of Stage 2A's 8 test departments - see §6.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12001",
+    "workbookName": "第一營業本部",
+    "normalizedName": "第一營業本部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-第一營業本部"
+    ],
+    "sourceCells": [
+      "營業總計!K3=12001",
+      "營業總計!K7='銷-第一營業本部'!C8",
+      "B.營管生產與編制!row12"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-第一營業本部!C3 self-declares 12001. Own row in B.營管生產與編制 (row12).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12011",
+    "workbookName": "系統整合部",
+    "normalizedName": "系統整合部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-系統整合"
+    ],
+    "sourceCells": [
+      "營業總計!S3=12011",
+      "營業總計!S7='銷-系統整合'!C8",
+      "B.營管生產與編制!row17"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-系統整合!C3 self-declares 12011. Own row in B.營管生產與編制 (row17).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12101",
+    "workbookName": "台灣營業處",
+    "normalizedName": "台灣營業處",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "B.營管生產與編制!row11 = SUM(C8:C10)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": true,
+    "evidence": "B.營管生產與編制 row11 ('台灣營業處') = SUM(C8:C10), i.e. 台北(12111)+台中(12121)+高雄(12131) - a pure subtotal row, no own detail sheet. Has real historical ledger rows (CUBE_ALLINONE row732 repeats bare value 12101 across many columns) confirming it is a genuine ERP posting-eligible code even though the 2025 budget table treats it as a rollup only.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12111",
+    "workbookName": "台北",
+    "normalizedName": "台北",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12101",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-台灣台北"
+    ],
+    "sourceCells": [
+      "銷-台灣台北!C3=12111",
+      "B.營管生產與編制!row8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-台灣台北!C3 self-declares 12111. Own row in B.營管生產與編制 (row8), separate from 台中/高雄. Already Stage 2A's own test department for this code - unaffected, see §6.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12121",
+    "workbookName": "台中",
+    "normalizedName": "台中",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12101",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-台灣台中"
+    ],
+    "sourceCells": [
+      "銷-台灣台中!C3=12121",
+      "B.營管生產與編制!row9"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-台灣台中!C3 self-declares 12121. Own row in B.營管生產與編制 (row9).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12131",
+    "workbookName": "高雄",
+    "normalizedName": "高雄",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12101",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-台灣高雄"
+    ],
+    "sourceCells": [
+      "銷-台灣高雄!C3=12131",
+      "B.營管生產與編制!row10"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-台灣高雄!C3 self-declares 12131. Own row in B.營管生產與編制 (row10).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12141",
+    "workbookName": "儀器-SI特販部(無)",
+    "normalizedName": "儀器-SI特販部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "INACTIVE",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-經營拓展SI特販(x)"
+    ],
+    "sourceCells": [
+      "ERP部門 name suffix '(無)'",
+      "銷-經營拓展SI特販(x)!C3=12141"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": false,
+    "evidence": "ERP部門 marks the name '(無)'. Its own detail sheet '銷-經營拓展SI特販(x)' still exists and self-declares 12141, but the sheet-name '(x)' disable marker is corroborated structurally: NO formula anywhere in 事業總計/行政總計/營業總計/A.事業費用與編制/B.營管生產與編制 references this sheet. 1,110 historical hits in ALLINONE confirm it was a real, active cost center in the past.",
+    "exclusionReason": "Marked '(無)' in ERP部門 and structurally excluded from every 2025 rollup formula.",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12201",
+    "workbookName": "行銷拓展處",
+    "normalizedName": "行銷拓展處",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "B.營管生產與編制!row13 = 營業總計!L6+營業總計!M6"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": true,
+    "evidence": "B.營管生產與編制 row13 ('行銷拓展處(技術+支援)') sums 營業總計 columns L(12211)+M(12221) - a pure subtotal, no own detail sheet or bare-code occurrence.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12211",
+    "workbookName": "行銷技術(原產品行銷部)",
+    "normalizedName": "行銷技術",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12201",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-經營拓展行銷技術"
+    ],
+    "sourceCells": [
+      "銷-經營拓展行銷技術!C3=12211",
+      "營業總計!L3=12211"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-經營拓展行銷技術!C3 self-declares 12211.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12221",
+    "workbookName": "行銷支援部(原行銷技術部)",
+    "normalizedName": "行銷支援部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12201",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-經營拓展行銷支援"
+    ],
+    "sourceCells": [
+      "銷-經營拓展行銷支援!C3=12221",
+      "營業總計!M3=12221"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-經營拓展行銷支援!C3 self-declares 12221. NOTE the ERP名稱 parentheticals show 12211/12221 were renamed/swapped at some point ('原產品行銷部' / '原行銷技術部') - workbook sheet names use the CURRENT naming.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12231",
+    "workbookName": "SI特販部(無)",
+    "normalizedName": "SI特販部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "INACTIVE",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門 name suffix '(無)'"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "ERP部門 marks '(無)'. No detail sheet self-declares this code anywhere in the 72-sheet workbook, and no 2025 rollup formula references it. 1,008 historical hits in ALLINONE confirm past real activity; none in 2025 structures.",
+    "exclusionReason": "Marked '(無)'; no 2025 sheet or formula of any kind.",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12301",
+    "workbookName": "海外營業處",
+    "normalizedName": "海外營業處",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "B.營管生產與編制!row6 = SUM(C4:C5)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": true,
+    "evidence": "B.營管生產與編制 row6 ('海外營業本部') = SUM(row4, row5), i.e. 12311/12321(merged, row4) + 12331(row5) - a pure subtotal. Marked 海外 per rule 1 even though it is itself a pure parent.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12311",
+    "workbookName": "營業一部",
+    "normalizedName": "營業一部",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12301",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-海外營一"
+    ],
+    "sourceCells": [
+      "銷-海外營一!C3=12311",
+      "營業總計!D3=\"12311/12321\"",
+      "營業總計!D7='銷-海外營一'!C8+'銷-海外營二'!C8",
+      "B.營管生產與編制!row4 (海外營業本部)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ SECOND MERGE CASE (same pattern as 11122/11132): 銷-海外營一!C3 self-declares 12311 with its own full detail sheet, but 營業總計's column header for this pair is the literal string '12311/12321' and every formula sums '銷-海外營一'+'銷-海外營二' together. The authoritative B.營管生產與編制 row4 ('海外營業本部', 負責人 林佑城) is ALSO a single combined 2025 headcount/budget line for both codes - there is no separate row for 12311 alone anywhere in the budgeting tables, even though the underlying detail sheet is fully independent. See merge case 2 in the report body.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12321",
+    "workbookName": "營業二部",
+    "normalizedName": "營業二部",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12301",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-海外營二"
+    ],
+    "sourceCells": [
+      "銷-海外營二!C3=12321",
+      "營業總計!D3=\"12311/12321\""
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-海外營二!C3 self-declares 12321. Same merge-case-2 situation as 12311 - see report body.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12331",
+    "workbookName": "海外行銷部(無)",
+    "normalizedName": "海外行銷部",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "INACTIVE",
+    "rollupParentCode": "12301",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-海外行銷(x)"
+    ],
+    "sourceCells": [
+      "銷-海外行銷(x)!C3=12331",
+      "營業總計!E3=12331",
+      "營業總計!E7='銷-海外行銷(x)'!C8",
+      "B.營管生產與編制!row5 (海外行銷企劃)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ CONTRADICTION: ERP部門 marks this '(無)' (nonexistent) and its sheet name carries the '(x)' disable marker, YET its detail sheet '銷-海外行銷(x)' IS still summed live into 營業總計 column E and rolls up into B.營管生產與編制 row5 ('海外行銷企劃', 負責人 林佑城, 2025 figure 1,290,000) - a nonzero, formula-computed 2025 target. Unlike 12141/12231 (whose '(x)'/'(無)' sheets are never referenced by any formula), this one is genuinely live. Human must confirm whether it is being phased out (残留 figures only) or should still be treated as active for 2025/Stage 2B.",
+    "exclusionReason": "原始 ERP 部門名稱明確標示「無」，不建立預算輸入表，不列入進度分母。",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12401",
+    "workbookName": "營業企劃處",
+    "normalizedName": "營業企劃處",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A35 (bare listing only)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "ZERO occurrences anywhere in the workbook outside its own ERP部門 row - not in any 2025 rollup formula, not even as a coincidental digit-substring in the 56K-row ALLINONE ledger. Children 12411/12421 are each independent BUDGET_OWNER lines in B.營管生產與編制 (rows 25-26) with NO visible '營業企劃處' subtotal row combining them (unlike 12201's analogous case, which DOES have a combined row). Cannot determine from this workbook alone whether 12401 is simply an unused reserved code or a genuine gap.",
+    "exclusionReason": "上層彙總單位，下屬12411成品企劃部及12421客戶服務部分別編製預算。",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12411",
+    "workbookName": "成品企劃部",
+    "normalizedName": "成品企劃部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12401",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-營業促進成品企劃"
+    ],
+    "sourceCells": [
+      "銷-營業促進成品企劃!C3=12411",
+      "營業總計!Q3=12411",
+      "B.營管生產與編制!row26"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-營業促進成品企劃!C3 self-declares 12411. Own row in B.營管生產與編制 (row26, labeled '營業技術-成品企劃').",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12421",
+    "workbookName": "客戶服務部",
+    "normalizedName": "客戶服務部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "12401",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-營業促進客戶服務"
+    ],
+    "sourceCells": [
+      "銷-營業促進客戶服務!C3=12421",
+      "營業總計!R3=12421",
+      "B.營管生產與編制!row25"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-營業促進客戶服務!C3 self-declares 12421. Own row in B.營管生產與編制 (row25, labeled '營業技術-客戶服務').",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "12501",
+    "workbookName": "教研營業處",
+    "normalizedName": "教研營業處",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "INACTIVE",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ALLINONE (historical ledger only)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "No 2025 rollup formula or dedicated sheet anywhere, but 3 hits in ALLINONE/CUBE_ALLINONE confirm real historical ledger activity under this code. Not marked '(無)' in ERP部門 (unlike 12141/12231/12331), which makes its complete absence from the 2025 budget structure ambiguous - possibly folded into another department's 2025 figures, possibly simply not yet budgeted for 2025.",
+    "exclusionReason": "人工決定刪除／停用，不建立預算輸入表、不顯示於可選部門、不建立BudgetVersion、不列入預算進度分母。",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13001",
+    "workbookName": "第二營業本部",
+    "normalizedName": "第二營業本部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "ZERO occurrences anywhere in the entire workbook, including the 56K-row ALLINONE historical ledger - the only ERP部門 code besides A1004 with absolutely no trace outside its own master-list row. Its nominal children (13101/13201 tiers) are themselves parent-only or route to their own children directly, with no visible link back to 13001. Likely a fully dormant reserved code, but this workbook provides no way to confirm intent.",
+    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13101",
+    "workbookName": "南亞暨ODM營業處",
+    "normalizedName": "南亞暨ODM營業處",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": "13001",
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A40"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-2 '處' label, zero occurrences beyond ERP部門 (not even in the historical ledger). Its sole child 13111 is the real, actively-posted cost line.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13111",
+    "workbookName": "ODM營業部",
+    "normalizedName": "ODM營業部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "13101",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-南亞ODM營業"
+    ],
+    "sourceCells": [
+      "銷-南亞ODM營業!C3=13111",
+      "營業總計!G3=13111",
+      "B.營管生產與編制!row24"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-南亞ODM營業!C3 self-declares 13111.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13201",
+    "workbookName": "安防事業處",
+    "normalizedName": "安防事業處",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ALLINONE (576 historical hits)",
+      "科目清單 (1 hit)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-2 '事業處' label with real historical ledger activity (576 ALLINONE hits) confirming it was once a live posting parent, but ZERO presence in any 2025 rollup formula. Its three children (13211/13221/13231) are individually budgeted across TWO different top-level categories (S and R) - see 13231's own row and the dual-category flag on 13211 below.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13211",
+    "workbookName": "營業部",
+    "normalizedName": "營業部（安防事業處）",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "13201",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-安防營業",
+      "生-影安"
+    ],
+    "sourceCells": [
+      "銷-安防營業!C3=13211",
+      "生-影安!C3=13211",
+      "營業總計!T3=\"13211/13221\"",
+      "B.營管生產與編制!row30 (Sales-section 影像安防 = 營業總計!T6)",
+      "B.營管生產與編制!row66 (Production-section 影像安防 = '生-影安'!C8)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ PROVEN DUAL-CATEGORY CODE (highest-priority risk finding - see §5 of the report): code 13211 has TWO independent, self-declaring detail sheets - '銷-安防營業' (feeds the Sales/S total, merged with 13221 as 營業總計 column T '安控事業處(不含研發/生產)') AND '生-影安' (feeds the Production/P total's '影像安防' line, B.營管生產與編制 row66). Both are live formulas in the SAME workbook. The workbook's own 'B.營管生產與編制' row70/71 ('全公司') = row67(生產, EXCLUDING 影像安防) + row31(營業,EXCLUDING影像安防) for the 'not incl.影像' variant, but the '(含影像)' variant at row71 = row68(生產,含影像=+生-影安/13211) + row32(營業,含影像=+營業總計!T6, itself =13211+13221) - meaning 13211's cost is counted TWICE inside the source workbook's own '全公司(含影像)' grand total (once via 生-影安 alone, once again via the T-column that also includes it). This is a defect in the ORIGINAL SOURCE WORKBOOK, not something Stage 2A/2B introduced - flagged for human decision on how (or whether) Stage 2B should represent this department (one BudgetVersion feeding two categories, two BudgetVersions, or a single P-only or S-only choice).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "13221",
+    "workbookName": "營業技術部",
+    "normalizedName": "營業技術部（安防事業處）",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "13201",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-安防營業技術"
+    ],
+    "sourceCells": [
+      "銷-安防營業技術!C3=13221",
+      "營業總計!T3=\"13211/13221\""
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-安防營業技術!C3 self-declares 13221. Reported merged with 13211 in 營業總計 column T (same shape as merge cases 1/2, but here the two children are ALSO both individually real, unmerged BUDGET_OWNER candidates with fully separate detail sheets - no evidence either one is a duplicate). No P-category counterpart sheet found for 13221 (unlike its sibling 13211).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "14001",
+    "workbookName": "第三營業本部",
+    "normalizedName": "第三營業本部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ALLINONE (8 historical hits)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "No 2025 rollup formula or dedicated sheet, but 8 hits in ALLINONE/CUBE_ALLINONE confirm some historical ledger activity. Not marked '(無)'. Could be a genuinely new/small unit not yet folded into the 2025 budget structure, or a legacy code with residual postings.",
+    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "15001",
+    "workbookName": "台灣特販本部",
+    "normalizedName": "台灣特販本部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A47"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-1 '本部' label, zero occurrences beyond ERP部門. Child 15011 is the real cost line.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "15011",
+    "workbookName": "台灣特販部",
+    "normalizedName": "台灣特販部",
+    "category": "S",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "15001",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-台灣特販"
+    ],
+    "sourceCells": [
+      "銷-台灣特販!C3=15011",
+      "營業總計!U3=15011",
+      "B.營管生產與編制!row7"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-台灣特販!C3 self-declares 15011.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "20001",
+    "workbookName": "GWK",
+    "normalizedName": "GWK",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWK"
+    ],
+    "sourceCells": [
+      "銷-GWK!C3=20001",
+      "營業總計!N3=20001",
+      "B.營管生產與編制!row14"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-GWK!C3 self-declares 20001. Already Stage 2A's own test department for this code - unaffected, see §6. 2024組織圖 row27 annotates this line '無費用' in one column (likely 'no manager email on file', not a budget-zero signal, since the 2025 rollup clearly computes a real figure for it).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "30001",
+    "workbookName": "GWSEA",
+    "normalizedName": "GWSEA",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWSEA"
+    ],
+    "sourceCells": [
+      "銷-GWSEA!C3=30001",
+      "營業總計!O3=30001",
+      "B.營管生產與編制!row18"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-GWSEA!C3 self-declares 30001.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "40001",
+    "workbookName": "固緯上海",
+    "normalizedName": "固緯上海",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWH"
+    ],
+    "sourceCells": [
+      "銷-GWH!C3=40001",
+      "營業總計!P3=40001",
+      "B.營管生產與編制!row15"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ NAME VARIANCE: ERP部門's official name is '固緯上海'; every workbook sheet/column/rollup label calls it 'GWH' instead. 銷-GWH!C3 self-declares 40001, confirming same department, different display name convention.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "50001",
+    "workbookName": "GWU",
+    "normalizedName": "GWU",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWU"
+    ],
+    "sourceCells": [
+      "銷-GWU!C3=50001",
+      "營業本部總表IS!row8 (grand Sales rollup formula lists '銷-GWU'!G8)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-GWU!C3 self-declares 50001. NOT present as its own column in the first year-block of 營業總計 sampled directly (a case caught only by scanning the full-workbook grand-total formula in 營業本部總表IS, per the task's 'do not check only the first few columns' instruction) - confirms it is still a real, separately detailed BUDGET_OWNER.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "60001",
+    "workbookName": "GWE",
+    "normalizedName": "GWE",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWE"
+    ],
+    "sourceCells": [
+      "銷-GWE!C3=60001",
+      "營業本部總表IS!row8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-GWE!C3 self-declares 60001. Same catch as 50001 - only visible via the full grand-total formula, not the sampled 營業總計 header block.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "70001",
+    "workbookName": "GWI",
+    "normalizedName": "GWI",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-南亞GWI"
+    ],
+    "sourceCells": [
+      "銷-南亞GWI!C3=70001",
+      "營業本部總表IS!row8"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ NAME VARIANCE: sheet is named '銷-南亞GWI' (prefixing the South-Asia regional grouping onto the GWI abbreviation), but 銷-南亞GWI!C3 self-declares 70001 = ERP部門's 'GWI'. Confirmed same department.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "80001",
+    "workbookName": "TEXIO",
+    "normalizedName": "TEXIO",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-TTC"
+    ],
+    "sourceCells": [
+      "銷-TTC!C3=80001",
+      "營業總計!H3=80001",
+      "B.營管生產與編制!row20"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ NAME VARIANCE: sheet is named '銷-TTC' (an internal/legacy abbreviation), yet 銷-TTC!C3 self-declares 80001 = ERP部門's 'TEXIO'. Confirmed same department by code, not by name.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "90001",
+    "workbookName": "大陸環測事業處(原GWA)",
+    "normalizedName": "大陸環測事業處",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWA"
+    ],
+    "sourceCells": [
+      "銷-GWA!C3=90001",
+      "營業總計!J3=90001",
+      "B.營管生產與編制!row21"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "銷-GWA!C3 self-declares 90001, matching ERP名稱's own parenthetical '(原GWA)' (formerly named GWA).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "A0004",
+    "workbookName": "蘇州廠",
+    "normalizedName": "蘇州廠",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "銷-GWS"
+    ],
+    "sourceCells": [
+      "銷-GWS!C3=\"A0004\"",
+      "營業總計!I3=\"A0004\"",
+      "B.營管生產與編制!row22"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ NAME COLLISION WARNING: sheet '銷-GWS' self-declares A0004 (蘇州廠), which is a COMPLETELY DIFFERENT department from ERP code 3001's own informal nickname 'GWS(拋轉)' (see 3001's own row below). Both are casually called 'GWS' in different places in this workbook/ERP naming history; they must never be confused when building any code->name lookup.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "A1004",
+    "workbookName": "蘇州品保處(無)",
+    "normalizedName": "蘇州品保處",
+    "category": "S",
+    "domesticOrOverseas": "overseas",
+    "disposition": "INACTIVE",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "ZERO occurrences anywhere in the entire 72-sheet workbook, including the historical ALLINONE ledger - the cleanest possible INACTIVE case. ERP部門 marks it '(無)'.",
+    "exclusionReason": "Marked '(無)'; literally no trace anywhere in the workbook.",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16004",
+    "workbookName": "生產本部",
+    "normalizedName": "生產本部",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "ERP部門!A49"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "Tier-1 '本部' label for the whole Production/P category. ZERO occurrences anywhere else, including the historical ledger (the one apparent CUBE_ALLINONE hit for '16004' was verified to be a false-positive digit-substring inside the unrelated number 11600491, not a real reference). B.營管生產與編制's production section goes straight from 品保/生產/生技/資材/採購 to '生產費用合計', with no intermediate '生產本部' column.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16104",
+    "workbookName": "台灣廠",
+    "normalizedName": "台灣廠",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "PARENT_ONLY",
+    "rollupParentCode": "16004",
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [
+      "B.營管生產與編制!row64 = SUM(C60:C63)"
+    ],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": true,
+    "evidence": "B.營管生產與編制 row64 ('台灣廠') = SUM(row60:row63), i.e. 生產(16124)+生技(16114)+資材(16134)+採購(16144). No bare occurrence of the literal code '16104' exists anywhere in the workbook - the rollup is identified purely by row position/name, not by an explicit code cell. NOTE: 16204(品保) is NOT included in this SUM - it is added back separately at row67/68 ('生產費用合計'), i.e. 品保 is structurally a sibling of 台灣廠's own subtotal, not a child of it.",
+    "exclusionReason": "人工確認為上層彙總單位，不建立預算輸入表，不列入預算編製進度分母。",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16114",
+    "workbookName": "生技部",
+    "normalizedName": "生技部",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "16104",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "生-生技"
+    ],
+    "sourceCells": [
+      "生-生技!C3=16114",
+      "B.營管生產與編制!row61"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "生-生技!C3 self-declares 16114.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16124",
+    "workbookName": "生產部",
+    "normalizedName": "生產部",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "16104",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "生-生產",
+      "銷-生產部"
+    ],
+    "sourceCells": [
+      "生-生產!C3=16124",
+      "銷-生產部!C3=16124",
+      "B.營管生產與編制!row60 ('生-生產'!C8)",
+      "營業總計!C7='銷-生產部'!C8",
+      "營業本部總表IS!row8 ('銷-生產部'!G8)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "⚠ SECOND PROVEN DUAL-CATEGORY CODE (see 13211 for the first): code 16124 has TWO independently self-declaring detail sheets - '生-生產' (the primary Production/P cost line, B.營管生產與編制 row60) AND '銷-生產部' (a SEPARATE sheet, also self-declaring 16124, that feeds column C of 營業總計/事業總計 and is explicitly summed into the master Sales rollup '營業本部總表IS'). Already Stage 2A's own test department for this code - Stage 2A only ever used '生-生產'-equivalent figures (P category); it has never touched or represented the '銷-生產部' component. Flag for human decision: does 16124's true 2025 budget include the Sales-side figure too, and if so how should Stage 2B represent a single ERP code contributing to two categories?",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16134",
+    "workbookName": "資材部",
+    "normalizedName": "資材部",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "16104",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "生-資材"
+    ],
+    "sourceCells": [
+      "生-資材!C3=16134",
+      "B.營管生產與編制!row62"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "生-資材!C3 self-declares 16134.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16144",
+    "workbookName": "採購部",
+    "normalizedName": "採購部",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "16104",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "生-採購"
+    ],
+    "sourceCells": [
+      "生-採購!C3=16144",
+      "B.營管生產與編制!row63"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "生-採購!C3 self-declares 16144.",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "16204",
+    "workbookName": "台灣廠品保處",
+    "normalizedName": "台灣廠品保處",
+    "category": "P",
+    "domesticOrOverseas": "domestic",
+    "disposition": "BUDGET_OWNER",
+    "rollupParentCode": "16004",
+    "mergedIntoCode": null,
+    "sourceSheets": [
+      "生-品保"
+    ],
+    "sourceCells": [
+      "生-品保!C3=16204",
+      "B.營管生產與編制!row58 (品保處小計)"
+    ],
+    "hasDedicatedDetailSheet": true,
+    "appearsInSummarySheet": true,
+    "evidence": "生-品保!C3 self-declares 16204. Already Stage 2A's own test department for this code - unaffected, see §6. Kept as a sibling subtotal alongside 台灣廠(16104), not nested under it (see 16104's own evidence).",
+    "exclusionReason": null,
+    "isStage2ATestDepartment": true,
+    "isExistingRealDepartment": false
+  },
+  {
+    "departmentCode": "3001",
+    "workbookName": "GWS(拋轉)",
+    "normalizedName": "GWS",
+    "category": "NEEDS_CONFIRMATION",
+    "domesticOrOverseas": "unknown",
+    "disposition": "INACTIVE",
+    "rollupParentCode": null,
+    "mergedIntoCode": null,
+    "sourceSheets": [],
+    "sourceCells": [],
+    "hasDedicatedDetailSheet": false,
+    "appearsInSummarySheet": false,
+    "evidence": "ERP部門 name suffix '拋轉' (carried-over/legacy transfer code). Every apparent 'occurrence' of the bare token '3001' elsewhere in the workbook was individually verified to be a coincidental digit-substring inside unrelated larger numbers in CUBE_ALLINONE (e.g. '300176', '43001', '23001', '30017') - NONE are genuine references to this code. ⚠ NAME COLLISION WARNING: do not confuse with A0004 (蘇州廠), whose own detail sheet is separately, unrelatedly nicknamed '銷-GWS'. No 部門類別代碼 (P/R/S/M) can be assigned from any evidence in this workbook - category left as NEEDS_CONFIRMATION rather than guessed.",
+    "exclusionReason": "No genuine reference anywhere in the workbook; likely a legacy/carry-over code with no current budgeting role, but this cannot be asserted with full confidence from this source alone.",
+    "isStage2ATestDepartment": false,
+    "isExistingRealDepartment": false
+  }
+]

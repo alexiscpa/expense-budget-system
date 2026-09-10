@@ -38,6 +38,51 @@ enum DeptClass {
   UNCLASSIFIED // 待確認，不計入四大類彙總，僅計入總計
 }
 
+// Domestic vs. overseas site, independent of DeptClass (an overseas unit is
+// still classified S/M/etc per its actual business function - see
+// docs/stage2b1-department-reconciliation.md; this flag exists purely so the
+// distinction can be queried/displayed without re-deriving it from the name).
+enum DomesticOverseas {
+  DOMESTIC
+  OVERSEAS
+}
+
+// Lifecycle of one department-scoped invitation (see Invitation model).
+// PENDING is the only state a token can still be redeemed from; every other
+// state is terminal - acceptInvitation() must never transition out of
+// ACCEPTED/EXPIRED/LOCKED/REVOKED.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED // set lazily when the 21-day window has passed - see isInvitationExpired()
+  LOCKED // 5 failed token attempts reached
+  REVOKED // an admin explicitly revoked it before it was ever accepted
+}
+
+// Which chart of accounts an Account row belongs to. Exists specifically so
+// account SELECTION (which accounts are "applicable" when a brand-new
+// BudgetVersion draft is created for a department) never has to guess from
+// an incidental field like sourceSeq or from the account name/code shape -
+// see getBudgetAccountsForDepartment in src/lib/budget/accountSelection.ts,
+// the single place every BudgetLine-creating entry point gets its account
+// set from.
+enum AccountCatalog {
+  // The canonical, all-four-class M/S/R/P chart of accounts (62/62/62/52),
+  // sourced from 2025費用總表-第一版(20241122).xlsx - the same workbook the
+  // Stage 2B-1/2B-2 department manifest itself is built from. Used for
+  // EVERY Stage 2B-2 department's new BudgetVersion draft, 17203 財務管理處
+  // included, regardless of forceEditable/isTestData/role/API entry point.
+  OFFICIAL
+  // 17203's own separate, one-off manual-demo chart of accounts (62
+  // M-class-only items, imported from a different, unrelated file -
+  // "2026年度費用預算V2--財務.xlsx" - for a hand-built walkthrough of the
+  // budget screen). Never selected for a NEW draft by
+  // getBudgetAccountsForDepartment; existing historical BudgetLine rows
+  // that already reference a FINANCE_DEMO account are never touched or
+  // migrated - this tag only changes which accounts a NEW draft picks up.
+  FINANCE_DEMO
+}
+
 enum AccountEntryType {
   FORMULA // 公式自動計算
   NOT_BUDGETED // 不編列，固定為 0
@@ -133,21 +178,36 @@ model User {
   // Reserved integration points for future company SSO / MFA (see SECURITY.md).
   ssoSubject        String?   @unique
   mfaEnabled        Boolean   @default(false)
+  // Bumped by revokeAllSessions() (lib/auth/session.ts) whenever an admin
+  // needs to force every existing login for this user to stop working
+  // immediately - every JWT session cookie embeds the sessionVersion that
+  // was current when it was issued, and getCurrentUser() rejects any
+  // session whose embedded value no longer matches this column. This is
+  // the ONLY revocation mechanism for an otherwise-stateless JWT session:
+  // there is no server-side session table to delete rows from, so
+  // "log this user out everywhere" has to work by making old tokens fail
+  // validation rather than by destroying them.
+  sessionVersion    Int       @default(0)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  departmentScopes     UserDepartmentScope[]
-  preparedVersions     BudgetVersion[]       @relation("PreparedBy")
-  submittedVersions    BudgetVersion[]       @relation("SubmittedBy")
-  reviewedVersions     BudgetVersion[]       @relation("ReviewedBy")
-  approvedVersions     BudgetVersion[]       @relation("ApprovedBy")
-  auditLogs            AuditLog[]
-  memoryEntries        MemoryEntry[]
-  aiConfirmedMemories  MemoryEntry[]         @relation("AiConfirmedBy")
-  importBatches        ImportBatch[]
-  passwordResets       PasswordResetToken[]
-  dualControlRequests  DualControlRequest[]  @relation("DualControlRequestedBy")
-  dualControlApprovals DualControlRequest[]  @relation("DualControlApprovedBy")
+  departmentScopes             UserDepartmentScope[]
+  invitationsCreated           Invitation[]          @relation("InvitationCreatedBy")
+  invitationsAccepted          Invitation[]          @relation("InvitationAcceptedBy")
+  invitationsRevoked           Invitation[]          @relation("InvitationRevokedBy")
+  preparedVersions             BudgetVersion[]       @relation("PreparedBy")
+  submittedVersions            BudgetVersion[]       @relation("SubmittedBy")
+  reviewedVersions             BudgetVersion[]       @relation("ReviewedBy")
+  approvedVersions             BudgetVersion[]       @relation("ApprovedBy")
+  preparationCompletedVersions BudgetVersion[]       @relation("PreparationCompletedBy")
+  inputConfirmedLines          BudgetLine[]          @relation("BudgetLineInputConfirmedBy")
+  auditLogs                    AuditLog[]
+  memoryEntries                MemoryEntry[]
+  aiConfirmedMemories          MemoryEntry[]         @relation("AiConfirmedBy")
+  importBatches                ImportBatch[]
+  passwordResets               PasswordResetToken[]
+  dualControlRequests          DualControlRequest[]  @relation("DualControlRequestedBy")
+  dualControlApprovals         DualControlRequest[]  @relation("DualControlApprovedBy")
 
   @@index([role])
 }
@@ -165,6 +225,55 @@ model UserDepartmentScope {
   department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
 
   @@unique([userId, departmentId])
+}
+
+// One department-scoped invitation: "this email may claim access to this
+// one department by proving possession of a token an admin generated".
+// Deliberately department-scoped, not user-scoped - the same email can
+// hold any number of PENDING/ACCEPTED invitations across different
+// departments at once (see Stage 2B-3 三部門邀請登入 Pilot), each with its
+// own independent token/expiry/attempt-count/status. Accepting one never
+// touches another: a locked or expired invitation for department A must
+// never block or auto-fail a still-valid invitation for department B.
+//
+// `id` is the ONLY thing that ever appears in the invitation URL
+// (/invite/[id]) or the invitation email - it identifies WHICH invitation
+// a token-entry attempt is against, but knowing it grants nothing by
+// itself. The actual secret (a random 32-byte token, shown once to the
+// admin who created it and delivered to the invitee out of band - see
+// docs on the create-invitation response) is never stored in plaintext,
+// never embedded in the URL, and never written to any log or AuditLog
+// row - only `tokenHash` (sha256 of the real token) is persisted, mirroring
+// PasswordResetToken's own tokenHash convention below.
+model Invitation {
+  id           String           @id @default(cuid())
+  departmentId String
+  email        String
+  tokenHash    String           @unique
+  status       InvitationStatus @default(PENDING)
+  // Wrong-token submissions against this specific invitation. Reset is
+  // never allowed once LOCKED - an admin must revoke and issue a fresh
+  // invitation (see requirement: "超過後鎖定該邀請", not "解鎖該邀請").
+  attemptCount Int              @default(0)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+
+  createdById      String
+  acceptedByUserId String?
+  revokedById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  createdBy  User       @relation("InvitationCreatedBy", fields: [createdById], references: [id])
+  acceptedBy User?      @relation("InvitationAcceptedBy", fields: [acceptedByUserId], references: [id])
+  revokedBy  User?      @relation("InvitationRevokedBy", fields: [revokedById], references: [id])
+
+  @@index([email])
+  @@index([departmentId])
+  @@index([status])
 }
 
 model PasswordResetToken {
@@ -221,6 +330,44 @@ model Department {
   // Null means "no confirmed reference year at all".
   priorYearReferenceFiscalYear Int?
 
+  // true only for a department created by the Stage 2A preview-only
+  // stress-seed endpoint (see src/lib/testdata). Never true for a real
+  // department, including 財務管理處 - this is what lets that endpoint be
+  // idempotent and lets any future cleanup tooling distinguish its rows
+  // from real master data.
+  isTestData Boolean @default(false)
+
+  // Domestic vs. overseas site (see DomesticOverseas). Independent of
+  // `class` - an overseas unit is still M/S/R/P per its real business
+  // function (e.g. 20001 GWK and A0004 蘇州廠 are both class S). Sourced
+  // from docs/data/stage2b1-department-manifest.json's domesticOrOverseas
+  // field, never guessed from the name/code.
+  domesticOrOverseas DomesticOverseas @default(DOMESTIC)
+
+  // ERP code of this department's roll-up parent per
+  // docs/data/stage2b1-department-manifest.json's rollupParentCode (e.g.
+  // "17103" 資訊處 rolls up to "17003" 管理本部). Deliberately a plain code
+  // string, not a foreign key to another Department row: most roll-up
+  // parents (PARENT_ONLY in the manifest, e.g. 17003) are never themselves
+  // created as Department rows in this system (they have no budget entry
+  // point), so there is nothing for a real FK to reference. Used only for
+  // read-side aggregation/display; see src/lib/reference/departmentRollups.ts
+  // for the accompanying static code->name lookup. Null means no
+  // intermediate roll-up (the department lists directly under the
+  // company-wide authority table).
+  rollupParentCode String?
+
+  // true for every department created via the Stage 2B-2 full-roster
+  // initializer (src/lib/masterdata/initializeBudgetOwnerDepartments.ts) -
+  // i.e. every row in this table, by construction, since this system never
+  // creates a Department row for a PARENT_ONLY/MERGED/INACTIVE/
+  // NEEDS_CONFIRMATION code (those have no budget entry point). Kept as an
+  // explicit column - rather than "presence in this table implies it" -
+  // so a future stage that DOES need non-owner Department rows (e.g. for
+  // org-chart display) has a real column to flip to false, without a
+  // migration that changes the meaning of every existing row.
+  isBudgetOwner Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -228,6 +375,7 @@ model Department {
   budgetVersions BudgetVersion[]
   salaryDataRows SalaryDataSource[]
   memoryEntries  MemoryEntry[]
+  invitations    Invitation[]
 
   @@index([class])
 }
@@ -241,6 +389,14 @@ model Account {
   entryType      AccountEntryType
   formulaKey     String?
   isActive       Boolean               @default(true)
+
+  // Which chart of accounts this row belongs to - see AccountCatalog's own
+  // doc comment. The explicit, permanent signal for account SELECTION
+  // (never sourceSeq, which only happens to correlate with catalog today
+  // because seedDemoMasterData.ts is currently the only writer of
+  // sourceSeq - see getBudgetAccountsForDepartment in
+  // src/lib/budget/accountSelection.ts).
+  catalog AccountCatalog @default(OFFICIAL)
 
   // True when `code` is a stand-in identifier assigned because the source
   // data (e.g. an imported spreadsheet) had no official chart-of-accounts
@@ -280,6 +436,7 @@ model Account {
 
   @@index([majorCategory])
   @@index([entryType])
+  @@index([catalog])
 }
 
 model FormulaDefinition {
@@ -385,6 +542,31 @@ model BudgetVersion {
   // submitting/resubmitting never touches it.
   lastPreparedAt DateTime
 
+  // Set when the preparer explicitly confirms the department headcount
+  // figure (budgetYearHeadcount) via updateBudgetYearHeadcount - never set
+  // by seed/migration/import. Null means the current budgetYearHeadcount
+  // (even if non-zero, e.g. seeded from Department.priorYearHeadcount) is
+  // only a starting reference, not a user-confirmed value. Mirrors
+  // BudgetLine.inputConfirmedAt's role for the per-line amount fields.
+  headcountConfirmedAt DateTime?
+
+  // Set only when the preparer explicitly runs "完成編製" (complete
+  // preparation) and it passes the completeness gate (see
+  // completePreparation in src/lib/budget/lineService.ts) - never inferred
+  // from status alone. Distinguishes READY_TO_SUBMIT (this set, status
+  // still DRAFT) from an ordinary in-progress DRAFT. Cleared on
+  // withdraw/return per the documented reopen rules (see
+  // completePreparation/reopenPreparation) - never left stale once content
+  // changes again.
+  preparationCompletedAt   DateTime?
+  preparationCompletedById String?
+  preparationCompletedBy   User?     @relation("PreparationCompletedBy", fields: [preparationCompletedById], references: [id])
+
+  // true only for a DRAFT version created by the Stage 2A preview-only
+  // stress-seed endpoint. Never true for a real department's budget
+  // version, including 財務管理處's.
+  isTestData Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -427,6 +609,21 @@ model BudgetLine {
   // updateDepartmentInputLine); never auto-filled from any import.
   justification String?
 
+  // Explicit "the preparer actually entered/confirmed this line" marker -
+  // the authoritative signal for progress tracking, replacing the old
+  // createdAt===updatedAt heuristic (see docs/stage2b1-department-
+  // reconciliation.md §7.2 for why that heuristic is unreliable: any batch
+  // UPDATE that happens to touch updatedAt would misclassify an untouched
+  // seeded row as "entered"). Set only inside updateDepartmentInputLine,
+  // only when hasContentChanged is true - never by seed, migration, or any
+  // batch-fix script. Null means untouched (whether the stored amount is
+  // 0 from @default(0) or otherwise); non-null (with inputConfirmedById)
+  // means the user explicitly entered/confirmed this line, including an
+  // explicit 0.
+  inputConfirmedAt   DateTime?
+  inputConfirmedById String?
+  inputConfirmedBy   User?     @relation("BudgetLineInputConfirmedBy", fields: [inputConfirmedById], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -436,6 +633,7 @@ model BudgetLine {
 
   @@unique([budgetVersionId, accountId])
   @@index([formulaStatus])
+  @@index([inputConfirmedAt])
 }
 
 model BudgetLineMonthlyActual {

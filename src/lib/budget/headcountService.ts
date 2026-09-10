@@ -67,10 +67,29 @@ export async function updateBudgetYearHeadcount(user: CurrentUser, versionId: st
     // the same headcount again (e.g. clicking into and back out of the
     // field) must not bump it.
     const hasChanged = budgetYearHeadcount !== version.budgetYearHeadcount;
+    const now = new Date();
 
     const updated = await tx.budgetVersion.update({
       where: { id: versionId },
-      data: hasChanged ? { budgetYearHeadcount, lastPreparedAt: new Date() } : { budgetYearHeadcount },
+      data: {
+        budgetYearHeadcount,
+        // Set unconditionally on every successful save, same rationale as
+        // BudgetLine.inputConfirmedAt in updateDepartmentInputLine: this
+        // function only ever runs on a genuine user save, so the act of
+        // saving IS the confirmation, even when the new value happens to
+        // equal a pre-seeded default (e.g. confirming a headcount of 0).
+        headcountConfirmedAt: now,
+        ...(hasChanged
+          ? {
+              lastPreparedAt: now,
+              // Same reasoning as updateDepartmentInputLine: a real change
+              // to the confirmed headcount after "完成編製" invalidates
+              // that prior completion mark.
+              preparationCompletedAt: null,
+              preparationCompletedById: null,
+            }
+          : {}),
+      },
     });
 
     await writeAuditLog(

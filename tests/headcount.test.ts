@@ -5,7 +5,7 @@ import { createBudgetVersionDraft } from "@/lib/budget/lineService";
 import { updateBudgetYearHeadcount, MAX_DEPARTMENT_HEADCOUNT } from "@/lib/budget/headcountService";
 import { submitBudgetVersion } from "@/lib/workflow/actions";
 import { seedDemoMasterData } from "@/lib/demo/seedDemoMasterData";
-import { DEMO_DEPARTMENT_CODE, DEMO_FISCAL_YEAR } from "@/lib/demo/constants";
+import { DEMO_DEPARTMENT_CODE, DEMO_DEPARTMENT_CLASS, DEMO_FISCAL_YEAR } from "@/lib/demo/constants";
 import { testBypassUser, TEST_BYPASS_USER_ID } from "@/lib/auth/testBypass";
 import { ApiError } from "@/lib/rbac/guard";
 import { prisma } from "@/lib/prisma";
@@ -179,6 +179,14 @@ describe("部門人數 survives re-running DEMO 主檔初始化", () => {
     await seedDemoMasterData(TEST_BYPASS_USER_ID);
     const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
     expect(demoDept.priorYearHeadcount).toBe(10);
+    // seedDemoMasterData's own accounts are catalog:"FINANCE_DEMO" (never
+    // selected by createBudgetVersionDraft - see accountSelection.ts), so a
+    // real OFFICIAL account for 17203's class is seeded separately here to
+    // stand in for "Stage 2B-2 has already provisioned 17203's real chart",
+    // exactly as in a real environment. This test's own subject (headcount
+    // surviving a DEMO master-data re-seed) doesn't depend on which/how many
+    // accounts exist.
+    await createAccount({ entryType: "DEPARTMENT_INPUT", majorCategory: DEMO_DEPARTMENT_CLASS });
 
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);

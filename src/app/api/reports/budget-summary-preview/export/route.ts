@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireUser, errorResponse, ApiError } from "@/lib/rbac/guard";
 import { isAuthBypassEnabled } from "@/lib/env";
-import { fetchFinanceDepartmentAndVersion } from "@/lib/reports/fetchFinanceVersion";
+import { fetchFinanceDepartmentAndVersion, fetchDeptSummaryEntries } from "@/lib/reports/fetchFinanceVersion";
+import { KNOWN_DEPARTMENT_CODES } from "@/lib/reports/budgetSummaryPreviewData";
 import {
   DEFAULT_DATA_SCOPE,
   EXPORT_FILENAME_LABELS,
@@ -23,9 +24,14 @@ import { formatTaipeiDate } from "@/lib/format/date";
  * API"): unreachable in Production regardless of who is logged in, and a
  * 401 for anyone not logged in even when the Preview bypass is active.
  *
- * Fully read-only: fetches the same data page.tsx reads (via the shared
- * fetchFinanceDepartmentAndVersion() query) and returns a generated file -
- * no Prisma write of any kind, INCLUDING no audit log entry. Every other
+ * Fully read-only: Excel fetches the same multi-department query page.tsx
+ * reads (fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES) - see
+ * lib/excel/budgetSummaryPreviewExport.ts for the root-cause history of why
+ * this must be the same call, not a separate 財務管理處-only one). PDF is
+ * out of scope this round and still reads only
+ * fetchFinanceDepartmentAndVersion() (財務管理處). Either way this route
+ * returns a generated file with no Prisma write of any kind, INCLUDING no
+ * audit log entry. Every other
  * write-adjacent endpoint in this app writes an AuditLog row (see
  * lib/excel/exportBudgetLines.ts's exportApprovedBudgetVersion for the
  * usual "official export" pattern) but Stage 1B explicitly requires
@@ -59,12 +65,25 @@ export async function GET(request: Request) {
     const format: "xlsx" | "pdf" = formatParam;
     const scope: BudgetDataScope = scopeParam;
 
-    const { financeDepartment, financeVersion } = await fetchFinanceDepartmentAndVersion();
     const exportedAtIso = new Date().toISOString();
-    const input = { financeDepartment, financeVersion, scope, exportedAtIso };
 
+    // Excel reads the exact same multi-department query the on-screen
+    // preview uses (fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES)) - see
+    // lib/excel/budgetSummaryPreviewExport.ts's own doc comment for the
+    // root-cause history. PDF is out of scope this round and keeps reading
+    // only fetchFinanceDepartmentAndVersion() (財務管理處), unchanged.
     const buffer =
-      format === "xlsx" ? await buildBudgetSummaryPreviewExcel(tableKey, input) : await buildBudgetSummaryPreviewPdf(tableKey, input);
+      format === "xlsx"
+        ? await buildBudgetSummaryPreviewExcel(tableKey, {
+            deptEntries: await fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES),
+            scope,
+            exportedAtIso,
+          })
+        : await buildBudgetSummaryPreviewPdf(tableKey, {
+            ...(await fetchFinanceDepartmentAndVersion()),
+            scope,
+            exportedAtIso,
+          });
 
     const dateStamp = formatTaipeiDate(exportedAtIso).replace(/\./g, "");
     const label = EXPORT_FILENAME_LABELS[tableKey];

@@ -74,3 +74,19 @@ export function isAuthBypassEnabled(): boolean {
   if (process.env.AUTH_DISABLED !== "true") return false;
   return process.env.VERCEL_ENV === "preview";
 }
+
+/**
+ * Whether this request is running in the Vercel Production environment.
+ * Deliberately reads VERCEL_ENV, not NODE_ENV: Vercel sets NODE_ENV=
+ * "production" for every deployed build (Preview included), so NODE_ENV
+ * cannot distinguish "real production data" from "a Preview deployment
+ * running a production build". VERCEL_ENV is unset entirely outside Vercel
+ * (local dev, this sandbox, CI) - those environments are never treated as
+ * production by this check. Used to hard-block operations that must never
+ * touch real production data (e.g. the Stage 2B-2 full-roster department
+ * initializer), independent of and in addition to isAuthBypassEnabled's own
+ * Preview-only gate for the unrelated demo-login bypass.
+ */
+export function isVercelProductionEnvironment(): boolean {
+  return process.env.VERCEL_ENV === "production";
+}

@@ -13,6 +13,7 @@ import {
 import { createBudgetVersionDraft, updateDepartmentInputLine } from "@/lib/budget/lineService";
 import { computeCategorySummary } from "@/lib/budget/categorySummary";
 import { submitBudgetVersion, startReview } from "@/lib/workflow/actions";
+import { seedOfficialAccountsFor17203 } from "./helpers/demoOfficialAccounts";
 import { testBypassUser, TEST_BYPASS_USER_ID } from "@/lib/auth/testBypass";
 import { ApiError } from "@/lib/rbac/guard";
 import { prisma } from "@/lib/prisma";
@@ -297,8 +298,7 @@ describe("createBudgetVersionDraft - performance/atomicity regression guard for 
   // number of SQL statements, not one per account.
   it("executes a small, constant number of SQL statements when creating a 62-line draft - not one round trip per account", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
 
     const queries: string[] = [];
@@ -356,8 +356,7 @@ describe("createBudgetVersionDraft - performance/atomicity regression guard for 
 
   it("rejects a duplicate draft creation with a clear conflict, without creating a duplicate version or any lines", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
 
     await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
@@ -473,8 +472,7 @@ describe("FIN-<seq> -> Excel 序號 account code migration - upgrading a databas
 describe("Preview bypass admin can hand-build and submit a test budget end to end", () => {
   it("creates a draft pre-populated with the real 2025 reference amounts (read-only), edits the 2026 amount, persists across a fresh reload, and submits", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
 
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
@@ -523,8 +521,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
   it("a freshly created line has createdAt === updatedAt (untouched signal for the UI's blank-input display), and an edit moves updatedAt forward", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
     const line = await prisma.budgetLine.findFirstOrThrow({ where: { budgetVersionId: draft.id } });
@@ -544,8 +541,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
   it("a 2025 reference amount of 0 never causes a division-by-zero - growth rate is null, delta is still computed", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
 
@@ -572,8 +568,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
   it("only the 2026 amount and justification are user-editable - account name/code/category never change", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
     const account = await prisma.account.findUniqueOrThrow({ where: { code: "39" } }); // 郵電費
@@ -593,8 +588,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
   it("category totals and the 管理費用 grand total are computed live from the 2026 line amounts, matching hand-computed sums", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
 
@@ -627,8 +621,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 
   it("rejects negative amounts exactly as it would for a real user (validation not skipped)", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
     const line = await prisma.budgetLine.findFirstOrThrow({ where: { budgetVersionId: draft.id } });
@@ -645,8 +638,7 @@ describe("Preview bypass admin can hand-build and submit a test budget end to en
 describe("Preview bypass admin still cannot bypass segregation-of-duties controls", () => {
   it("has no review/approve capability, so it cannot advance its own submission past SUBMITTED", async () => {
     setEnv("preview", "true");
-    await seedDemoMasterData(TEST_BYPASS_USER_ID);
-    const demoDept = await prisma.department.findUniqueOrThrow({ where: { code: DEMO_DEPARTMENT_CODE } });
+    const demoDept = await seedOfficialAccountsFor17203();
     const bypassUser = testBypassUser();
     const draft = await createBudgetVersionDraft(bypassUser, demoDept.id, DEMO_FISCAL_YEAR);
     await submitBudgetVersion(bypassUser, draft.id);

@@ -48,7 +48,7 @@ export async function POST(request: Request) {
   }
 
   await recordLoginSuccess(email.toLowerCase(), user.id, ip);
-  await createSession(user.id, user.role, user.companyWide);
+  await createSession(user.id, user.role, user.companyWide, user.sessionVersion);
   await writeAuditLog({
     actorUserId: user.id,
     action: "LOGIN_SUCCESS",

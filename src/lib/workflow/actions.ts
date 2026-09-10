@@ -170,7 +170,19 @@ export async function returnBudgetVersion(user: CurrentUser, versionId: string, 
 
     const updated = await tx.budgetVersion.update({
       where: { id: versionId },
-      data: { status: "RETURNED", returnedAt: new Date(), returnReason: reason },
+      data: {
+        status: "RETURNED",
+        returnedAt: new Date(),
+        returnReason: reason,
+        // A finance-reviewer return means something needs to change before
+        // this version is ready again - any prior "完成編製" mark no
+        // longer reflects reality, so the preparer must re-run
+        // completePreparation after addressing the return reason. Mirrors
+        // the same clear-on-real-change rule in
+        // updateDepartmentInputLine/updateBudgetYearHeadcount.
+        preparationCompletedAt: null,
+        preparationCompletedById: null,
+      },
     });
 
     await tx.memoryEntry.create({

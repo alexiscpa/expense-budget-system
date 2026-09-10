@@ -2,32 +2,49 @@
 
 import { useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { CATEGORY_LABELS, CATEGORY_ORDER } from "@/lib/budget/categorySummary";
+import { useRouter } from "next/navigation";
 import { formatAmountCell, formatCountCell, formatGrowthRateCell } from "@/lib/reports/summaryFormat";
 import {
   UNIT_BLOCKS,
-  PRODUCTION_PLACEHOLDER_ROWS,
   TEMPLATE_FIGURES_DISCLAIMER,
   type UnitBlock,
 } from "@/lib/reports/budgetSummaryPreviewData";
 import {
   STATUS_LABEL,
   buildFinanceAgg,
-  metricsForLines,
   financeVersionInScope,
-  financeNotInScopeStatusLabel,
   DATA_SCOPE_OPTIONS,
   DEFAULT_DATA_SCOPE,
   type BudgetDataScope,
   type ExportTableKey,
   type FinanceVersionDto,
 } from "@/lib/reports/summaryReportData";
+import {
+  buildDeptAgg,
+  buildLineAgg,
+  buildReportingAccountAgg,
+  buildUnmappedAccountRows,
+  buildScopeCompleteness,
+  isSgaClass,
+  isProductionClass,
+  type DeptSummaryEntry,
+  type ScopeCompleteness,
+  type UnmappedAccountRow,
+} from "@/lib/reports/multiDepartmentSummary";
+import { SGA_REPORTING_ACCOUNTS, PRODUCTION_REPORTING_ACCOUNTS, type ReportingAccountMapping } from "@/lib/reports/reportingAccountMap";
 import { formatTaipeiDate } from "@/lib/format/date";
+import type { DeptClass } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
-// Excel/PDF export links (Stage 1B) - a plain <a download> to the export API
-// route is enough since it already answers with a real `attachment`
+// Excel/PDF export links - a plain <a download> to the export API route is
+// enough since it already answers with a real `attachment`
 // Content-Disposition; no client-side fetch/blob juggling needed.
+//
+// Excel now reads the exact same multi-department query this page uses
+// (fetchDeptSummaryEntries(KNOWN_DEPARTMENT_CODES) - see
+// lib/excel/budgetSummaryPreviewExport.ts for the root-cause history of the
+// earlier "web shows Stage 2A data, Excel shows an empty placeholder" bug).
+// PDF has not been extended yet - see ExportScopeNotice below.
 // ---------------------------------------------------------------------------
 
 function exportHref(tableKey: ExportTableKey, format: "xlsx" | "pdf", scope: BudgetDataScope): string {
@@ -60,6 +77,14 @@ function ExportButtons({
         匯出PDF
       </a>
     </span>
+  );
+}
+
+function ExportScopeNotice() {
+  return (
+    <p className="mb-3 rounded bg-slate-100 px-3 py-2 text-xs text-slate-500">
+      Excel已支援目前畫面資料（含財務管理處與 Stage 2A 測試部門）；PDF尚待下一階段更新。
+    </p>
   );
 }
 
@@ -112,6 +137,13 @@ function cell(text: string, negative = false, align: "left" | "right" = "right")
 
 function textCell(text: string): Cell {
   return { text, negative: false, align: "left" };
+}
+
+/** Test-data badge appended to a department name cell's text - the on-screen
+ * table renders plain text cells, so the badge is a simple bracketed suffix
+ * rather than a separate styled element (see StickyReportTable). */
+function deptNameLabel(name: string, isTestData: boolean): string {
+  return isTestData ? `${name}【測試資料】` : name;
 }
 
 interface TableRow {
@@ -167,7 +199,7 @@ function StickyReportTable({
       zIndex: frozen ? 5 : 3,
       background: rowIndex === 1 ? COLOR.groupHeaderBg : COLOR.columnHeaderBg,
       color: rowIndex === 1 ? COLOR.groupHeaderText : undefined,
-      boxShadow: frozen && colIndex === frozenColCount - 1 ? "2px 0 4px -2px rgba(15,23,42,0.35)" : undefined,
+      boxShadow: frozen && colIndex === frozenColCount - 1 ? "2px 0 4px -2px rgba(15, 23, 42, 0.35)" : undefined,
     };
   }
 
@@ -245,18 +277,26 @@ function SectionTitle({ children, action }: { children: ReactNode; action?: Reac
 export function BudgetSummaryPreviewClient({
   financeDepartment,
   financeVersion: rawFinanceVersion,
+  deptEntries,
 }: {
   financeDepartment: { code: string; name: string } | null;
   financeVersion: FinanceVersionDto | null;
+  /** Real, code-addressable departments (Stage 2A's 8 test departments plus
+   * 財務管理處) with their own fiscalYear=2027 BudgetVersion/lines, if any -
+   * see fetchFinanceVersion.ts#fetchDeptSummaryEntries. Drives every tab's
+   * on-screen figures; the Excel export (see ExportButtons above) now reads
+   * this exact same query server-side, so the two can never disagree. PDF
+   * still reads financeVersion (財務管理處 only) directly - not extended yet. */
+  deptEntries: DeptSummaryEntry[];
 }) {
   const [tab, setTab] = useState<TabKey>("unit");
   const [dataScope, setDataScope] = useState<BudgetDataScope>(DEFAULT_DATA_SCOPE);
+  const router = useRouter();
 
-  // The fiscalYear=2027 version filtered by the currently-selected 資料範圍
-  // - "in scope" figures are what's actually shown/exported; the raw
-  // version (unfiltered) is kept around only to tell "no 2027 version at
-  // all" apart from "one exists but isn't in the selected scope" (see
-  // financeNotInScopeStatusLabel below).
+  // Export-only: the fiscalYear=2027 version filtered by the currently-
+  // selected 資料範圍, used solely for the disclaimer text and the export
+  // links below (see ExportScopeNotice) - the on-screen tabs never read
+  // this, only deptEntries.
   const financeVersion = useMemo(() => financeVersionInScope(rawFinanceVersion, dataScope), [rawFinanceVersion, dataScope]);
   const financeAgg = useMemo(() => buildFinanceAgg(financeVersion), [financeVersion]);
 
@@ -264,7 +304,7 @@ export function BudgetSummaryPreviewClient({
     <main className="mx-auto max-w-7xl px-6 py-10">
       <h1 className="mb-1 text-xl font-bold">費用預算彙總表（版型預覽）</h1>
       <p className="mb-4 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
-        版型預覽：目前僅財務管理處為實際測試資料，其他部門尚未匯入。
+        Preview 測試頁：顯示財務管理處與 Stage 2A 8 個測試部門（標示【測試資料】）的即時資料，其餘部門尚未匯入。
         {financeVersion && ` ${TEMPLATE_FIGURES_DISCLAIMER}`}
       </p>
 
@@ -286,6 +326,7 @@ export function BudgetSummaryPreviewClient({
         <ExportButtons tableKey={currentTabExportKey(tab)} scope={dataScope} label="匯出目前表格" />
         <ExportButtons tableKey="full" scope={dataScope} label="匯出全部彙總表" />
       </div>
+      <ExportScopeNotice />
 
       <div className="mb-4 flex gap-2 border-b border-slate-200">
         {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
@@ -301,19 +342,27 @@ export function BudgetSummaryPreviewClient({
         ))}
       </div>
 
-      {tab === "unit" && (
-        <UnitTab
-          financeDepartment={financeDepartment}
-          rawFinanceVersion={rawFinanceVersion}
-          financeVersion={financeVersion}
-          financeAgg={financeAgg}
-          dataScope={dataScope}
-        />
-      )}
-      {tab === "sga" && (
-        <SgaTab rawFinanceVersion={rawFinanceVersion} financeVersion={financeVersion} financeAgg={financeAgg} dataScope={dataScope} />
-      )}
-      {tab === "production" && <ProductionTab financeAgg={financeAgg} dataScope={dataScope} />}
+      {tab === "unit" && <UnitTab deptEntries={deptEntries} dataScope={dataScope} />}
+      {tab === "sga" && <SgaTab deptEntries={deptEntries} dataScope={dataScope} />}
+      {tab === "production" && <ProductionTab deptEntries={deptEntries} dataScope={dataScope} />}
+
+      {/* Bottom copy of the shared nav bar's top button - this page's
+          tables can run well past one screen, so a reader who has scrolled
+          all the way down should not have to scroll back up just to leave.
+          Every StickyReportTable's own horizontal scroll is contained
+          within its own bounded div (see StickyReportTable), so this
+          page-level button - outside all of them - never moves with any
+          table's horizontal scroll regardless of which tab is active. */}
+      <div className="mt-8 border-t border-slate-200 pt-4">
+        <button
+          type="button"
+          onClick={() => router.push("/dashboard")}
+          aria-label="回到預算總覽"
+          className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-100"
+        >
+          ← 回到預算總覽
+        </button>
+      </div>
     </main>
   );
 }
@@ -322,11 +371,7 @@ export function BudgetSummaryPreviewClient({
 // Tab 1: 單位別費用與編制
 // ---------------------------------------------------------------------------
 
-// Deliberately wide enough to require horizontal scroll within the page's
-// max-w-7xl content area at every tested viewport (1366/1440/1920px) -
-// matches the dense financial-report style of the reference spreadsheet
-// (spec §六) and exercises the frozen 部門 column / frozen header.
-const UNIT_COL_WIDTHS = [160, 90, 140, 90, 140, 130, 150, 130, 110, 100, 150];
+const UNIT_COL_WIDTHS = [180, 90, 140, 90, 140, 130, 150, 130, 110, 100, 150];
 const UNIT_HEADER_GROUPS: HeaderGroup[] = [
   { label: "部門", span: 1 },
   { label: "2026推估", span: 2 },
@@ -348,51 +393,44 @@ const UNIT_HEADER_LABELS = [
   "最後編製日期",
 ];
 
-function UnitTab({
-  financeDepartment,
-  rawFinanceVersion,
-  financeVersion,
-  financeAgg,
-  dataScope,
-}: {
-  financeDepartment: { code: string; name: string } | null;
-  rawFinanceVersion: FinanceVersionDto | null;
-  financeVersion: FinanceVersionDto | null;
-  financeAgg: ReturnType<typeof buildFinanceAgg>;
-  dataScope: BudgetDataScope;
-}) {
+function findEntry(deptEntries: DeptSummaryEntry[], code: string | undefined): DeptSummaryEntry | undefined {
+  if (!code) return undefined;
+  return deptEntries.find((e) => e.code === code);
+}
+
+function UnitTab({ deptEntries, dataScope }: { deptEntries: DeptSummaryEntry[]; dataScope: BudgetDataScope }) {
   return (
     <div>
       <div className="mb-4">
         <ExportButtons tableKey="unit-all" scope={dataScope} label="四大體系全部匯出" />
       </div>
       {UNIT_BLOCKS.map((block) => {
-        const rows: TableRow[] = block.departments.map((name) => {
-          const isFinanceDept = Boolean(financeDepartment && name === financeDepartment.name);
-          const isFinance = isFinanceDept && financeVersion && financeAgg;
-          if (isFinance && financeVersion && financeAgg) {
+        const blockEntries: DeptSummaryEntry[] = [];
+        const rows: TableRow[] = block.departments.map(({ name, code }) => {
+          const entry = findEntry(deptEntries, code);
+          if (entry && entry.version) {
+            blockEntries.push(entry);
+            const agg = buildDeptAgg(entry.version)!;
             return {
               cells: [
-                textCell(name),
-                cell(formatCountCell(financeVersion.priorYearHeadcount).text),
-                { ...formatAmountCell(financeAgg.priorTotal) },
-                cell(formatCountCell(financeVersion.budgetYearHeadcount).text),
-                { ...formatAmountCell(financeAgg.excludingNewTotal) },
-                { ...formatAmountCell(financeAgg.newHireTotal) },
-                { ...formatAmountCell(financeAgg.grandTotal) },
-                { ...formatAmountCell(financeAgg.delta) },
-                { ...formatGrowthRateCell(financeAgg.growth) },
-                cell(STATUS_LABEL[financeVersion.status] ?? financeVersion.status, false, "left"),
-                cell(formatTaipeiDate(financeVersion.lastPreparedAt), false, "left"),
+                textCell(deptNameLabel(name, entry.isTestData)),
+                cell(formatCountCell(entry.version.priorYearHeadcount).text),
+                { ...formatAmountCell(agg.priorTotal) },
+                cell(formatCountCell(entry.version.budgetYearHeadcount).text),
+                { ...formatAmountCell(agg.excludingNewTotal) },
+                { ...formatAmountCell(agg.newHireTotal) },
+                { ...formatAmountCell(agg.grandTotal) },
+                { ...formatAmountCell(agg.delta) },
+                { ...formatGrowthRateCell(agg.growth) },
+                cell(STATUS_LABEL[entry.version.status] ?? entry.version.status, false, "left"),
+                cell(formatTaipeiDate(entry.version.lastPreparedAt), false, "left"),
               ],
             };
           }
-          // 財務管理處 has real BudgetVersion data for other fiscal years,
-          // just not (yet) for the 2027 target year - distinct status from
-          // the generic "未編製" used for representative-only departments.
+          const statusText = code ? TARGET_YEAR_NOT_PREPARED_TEXT : "未編製";
           return {
             cells: [
-              textCell(name),
+              textCell(entry ? deptNameLabel(name, entry.isTestData) : name),
               cell("—"),
               cell("—"),
               cell("—"),
@@ -401,45 +439,55 @@ function UnitTab({
               cell("—"),
               cell("—"),
               cell("—"),
-              cell(isFinanceDept ? financeNotInScopeStatusLabel(rawFinanceVersion, dataScope) : "未編製", false, "left"),
+              cell(statusText, false, "left"),
               cell("—", false, "left"),
             ],
           };
         });
 
-        // 體系小計 - only sums departments with real data (currently at most 財務管理處).
-        const realInBlock = block.departments.includes(financeDepartment?.name ?? " ") && financeAgg && financeVersion;
-        const subtotalRow: TableRow = {
-          background: COLOR.subtotalBg,
-          bold: true,
-          cells: realInBlock
-            ? [
-                textCell(`${block.title.split("、")[1] ?? block.title} 體系小計（暫計，尚有未編製部門）`),
-                cell(formatCountCell(financeVersion!.priorYearHeadcount).text),
-                { ...formatAmountCell(financeAgg!.priorTotal) },
-                cell(formatCountCell(financeVersion!.budgetYearHeadcount).text),
-                { ...formatAmountCell(financeAgg!.excludingNewTotal) },
-                { ...formatAmountCell(financeAgg!.newHireTotal) },
-                { ...formatAmountCell(financeAgg!.grandTotal) },
-                { ...formatAmountCell(financeAgg!.delta) },
-                { ...formatGrowthRateCell(financeAgg!.growth) },
-                textCell(""),
-                textCell(""),
-              ]
-            : [
-                textCell(`${block.title.split("、")[1] ?? block.title} 體系小計（暫計，尚有未編製部門）`),
-                cell("—"),
-                cell("—"),
-                cell("—"),
-                cell("—"),
-                cell("—"),
-                cell("—"),
-                cell("—"),
-                cell("—"),
-                textCell(""),
-                textCell(""),
-              ],
-        };
+        const subtotalLabel = `${block.title.split("、")[1] ?? block.title} 體系小計（暫計，尚有未編製部門）`;
+        const subtotalRow: TableRow =
+          blockEntries.length > 0
+            ? (() => {
+                const pooledLines = blockEntries.flatMap((e) => e.version!.lines);
+                const agg = buildLineAgg(pooledLines);
+                const priorHeadcount = blockEntries.reduce((sum, e) => sum + (e.version!.priorYearHeadcount ?? 0), 0);
+                const budgetHeadcount = blockEntries.reduce((sum, e) => sum + e.version!.budgetYearHeadcount, 0);
+                return {
+                  background: COLOR.subtotalBg,
+                  bold: true,
+                  cells: [
+                    textCell(subtotalLabel),
+                    cell(formatCountCell(priorHeadcount).text),
+                    { ...formatAmountCell(agg.prior) },
+                    cell(formatCountCell(budgetHeadcount).text),
+                    { ...formatAmountCell(agg.excludingNew) },
+                    { ...formatAmountCell(agg.newHire) },
+                    { ...formatAmountCell(agg.total) },
+                    { ...formatAmountCell(agg.deltaTotal) },
+                    { ...formatGrowthRateCell(agg.growthTotal) },
+                    textCell(""),
+                    textCell(""),
+                  ],
+                };
+              })()
+            : {
+                background: COLOR.subtotalBg,
+                bold: true,
+                cells: [
+                  textCell(subtotalLabel),
+                  cell("—"),
+                  cell("—"),
+                  cell("—"),
+                  cell("—"),
+                  cell("—"),
+                  cell("—"),
+                  cell("—"),
+                  cell("—"),
+                  textCell(""),
+                  textCell(""),
+                ],
+              };
 
         return (
           <div key={block.key} className="mb-6">
@@ -460,252 +508,266 @@ function UnitTab({
   );
 }
 
+const TARGET_YEAR_NOT_PREPARED_TEXT = "2027年度尚未編製";
+
 // ---------------------------------------------------------------------------
-// Tab 2 / Tab 3 shared column layout
+// Tab 2 / Tab 3 shared: 科目別彙總 - one row per reportingAccountKey, NEVER
+// per department+account (see reportingAccountMap.ts / multiDepartmentSummary
+// .ts#buildReportingAccountAgg for why department names must not repeat here).
 // ---------------------------------------------------------------------------
 
-// Same rationale as UNIT_COL_WIDTHS above - wide enough to require
-// horizontal scroll and demonstrate the frozen 序／項目 columns.
-const ACCOUNT_COL_WIDTHS = [60, 220, 130, 130, 130, 140, 130, 120, 130, 120];
-const ACCOUNT_HEADER_GROUPS: HeaderGroup[] = [
-  { label: "基本資料", span: 2 },
+const HEADCOUNT_ROW_BG = "#eef2ff"; // indigo-50, matches BudgetVersionClient's 部門人數 row
+
+const REPORTING_COL_WIDTHS = [56, 130, 220, 140, 150, 130, 150, 130, 110];
+const REPORTING_HEADER_GROUPS: HeaderGroup[] = [
+  { label: "基本資料", span: 3 },
   { label: "2026推估", span: 1 },
-  { label: "2027目標計畫", span: 3 },
-  { label: "與2026推估比較", span: 4 },
+  { label: "2027預算", span: 3 },
+  { label: "與2026推估比較", span: 2 },
 ];
-const ACCOUNT_HEADER_LABELS = [
+const REPORTING_HEADER_LABELS = [
   "序",
-  "項目",
-  "2026推估",
-  "2027目標不含新員",
-  "2027目標新員",
-  "2027合計（含新員）",
-  "不含新員增減",
-  "不含新員成長率",
-  "含新員增減",
-  "含新員成長率",
+  "報表科目編號",
+  "會計科目名稱",
+  "2026年推估",
+  "2027年預算（不含新員）",
+  "2027年新員預算",
+  "2027年合計（含新員）",
+  "增減金額",
+  "增減率",
 ];
 
-function metricsRowCells(seq: string, name: string, m: ReturnType<typeof metricsForLines>): Cell[] {
+function reportingRowCells(seq: string, key: string, name: string, m: ReturnType<typeof buildLineAgg>): Cell[] {
   return [
     cell(seq, false, "left"),
+    cell(key, false, "left"),
     textCell(name),
     { ...formatAmountCell(m.prior) },
     { ...formatAmountCell(m.excludingNew) },
     { ...formatAmountCell(m.newHire) },
     { ...formatAmountCell(m.total) },
-    { ...formatAmountCell(m.deltaExcl) },
-    { ...formatGrowthRateCell(m.growthExcl) },
     { ...formatAmountCell(m.deltaTotal) },
     { ...formatGrowthRateCell(m.growthTotal) },
   ];
 }
 
-// ---------------------------------------------------------------------------
-// Tab 2: 管銷研科目彙總 (營業＋管理＋研發 - 排除生產)
-// ---------------------------------------------------------------------------
-
-function SgaTab({
-  rawFinanceVersion,
-  financeVersion,
-  financeAgg,
-  dataScope,
-}: {
-  rawFinanceVersion: FinanceVersionDto | null;
-  financeVersion: FinanceVersionDto | null;
-  financeAgg: ReturnType<typeof buildFinanceAgg>;
-  dataScope: BudgetDataScope;
-}) {
-  const rows: TableRow[] = [];
-
-  if (financeVersion && financeAgg) {
-    // 1. 平均人數 - headcount, displayed in the same money-shaped columns as every other row.
-    rows.push({
+/** Departments overview mini-table shown at the top of the SGA/production tabs - lists each department ONCE (not per account), so it does not reintroduce the "same name repeated per row" problem this rewrite fixes in the account table below it. */
+function DeptOverviewRows(entries: DeptSummaryEntry[]): TableRow[] {
+  return entries.map((e) => {
+    const agg = buildDeptAgg(e.version)!;
+    return {
       cells: [
-        cell("—", false, "left"),
-        textCell("平均人數"),
-        { ...formatCountCell(financeVersion.priorYearHeadcount) },
-        { ...formatCountCell(financeVersion.budgetYearHeadcount) },
-        cell("—"),
-        { ...formatCountCell(financeVersion.budgetYearHeadcount) },
+        textCell(deptNameLabel(e.name, e.isTestData)),
+        textCell(`${STATUS_LABEL[e.version!.status] ?? e.version!.status}`),
+        { ...formatAmountCell(agg.priorTotal) },
+        { ...formatAmountCell(agg.excludingNewTotal) },
+        { ...formatAmountCell(agg.newHireTotal) },
+        { ...formatAmountCell(agg.grandTotal) },
         cell("—"),
         cell("—"),
         cell("—"),
         cell("—"),
       ],
-    });
+    };
+  });
+}
 
-    // 2. 管銷研費用 - running grand-total summary row, positioned right after headcount.
-    rows.push({
-      background: COLOR.totalBg,
+/** 應編/已建立草稿/已輸入/已送出/尚未編製部門數 + 資料更新時間 - shown once
+ * above each scope's table (see multiDepartmentSummary.ts#buildScopeCompleteness
+ * for why this is a scope-level, not per-row, signal). The not-yet-prepared
+ * department NAMES are only ever revealed behind an explicit expand - the
+ * main table itself never lists any department. */
+function CompletenessBanner({ completeness }: { completeness: ScopeCompleteness }) {
+  return (
+    <div className="mb-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        <span>應編部門數：{completeness.expectedDepartmentCount}</span>
+        <span>已建立草稿部門數：{completeness.draftDepartmentCount}</span>
+        <span>已輸入部門數：{completeness.inputDepartmentCount}</span>
+        <span>已送出部門數：{completeness.submittedDepartmentCount}</span>
+        <span>尚未編製部門數：{completeness.notPreparedDepartmentCount}</span>
+        <span>資料更新時間：{completeness.lastUpdatedAt ? formatTaipeiDate(completeness.lastUpdatedAt) : "—"}</span>
+      </div>
+      {completeness.notPreparedDepartmentCount > 0 && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-slate-500">展開查看尚未編製的部門（{completeness.notPreparedDepartmentCount}）</summary>
+          <p className="mt-1">{completeness.notPreparedDepartmentNames.join("、")}</p>
+        </details>
+      )}
+      {completeness.draftDepartmentCount > 0 && completeness.draftDepartmentCount < completeness.expectedDepartmentCount && (
+        <p className="mt-1 font-medium text-amber-700">部分部門未編製 - 下方金額為目前已建立草稿之部門的累計數，非全部應編部門的最終數。</p>
+      )}
+    </div>
+  );
+}
+
+/** "待確認科目" - a real BudgetLine whose Account.code has no entry in
+ * reportingAccountMap.ts (e.g. 財務管理處's own manually-created demo
+ * account). Listed per-department, never merged into the main table above -
+ * see buildUnmappedAccountRows's own doc comment for why. */
+function UnmappedAccountsSection({ rows }: { rows: UnmappedAccountRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <SectionTitle>待確認科目（尚無報表科目對照，未併入上方彙總）</SectionTitle>
+      <p className="mb-2 text-xs text-slate-500">
+        以下科目目前無法明確對應到管銷研／生產的正式報表科目對照表（reportingAccountMap.ts），為避免以名稱誤合併，暫不計入上方彙總，需人工確認後再補上對照。
+      </p>
+      <StickyReportTable
+        frozenColCount={2}
+        colWidths={[110, 160, 110, 200, 130, 130]}
+        headerGroups={[
+          { label: "部門", span: 2 },
+          { label: "科目", span: 2 },
+          { label: "2026推估", span: 1 },
+          { label: "2027合計", span: 1 },
+        ]}
+        headerLabels={["部門代碼", "部門名稱", "科目編號", "科目名稱", "2026推估", "2027合計"]}
+        rows={rows.map((r) => ({
+          cells: [
+            cell(r.departmentCode, false, "left"),
+            textCell(r.departmentName),
+            cell(r.accountCode, false, "left"),
+            textCell(r.accountName),
+            { ...formatAmountCell(r.line.priorYearOriginalBudget) },
+            { ...formatAmountCell(buildLineAgg([r.line]).total) },
+          ],
+        }))}
+        maxHeightPx={240}
+      />
+    </div>
+  );
+}
+
+function ReportingAccountTab({
+  deptEntries,
+  dataScope,
+  classFilter,
+  mappingTable,
+  scopeDescription,
+  exportKey,
+  totalLabel,
+}: {
+  deptEntries: DeptSummaryEntry[];
+  dataScope: BudgetDataScope;
+  classFilter: (deptClass: DeptClass) => boolean;
+  mappingTable: ReportingAccountMapping[];
+  scopeDescription: string;
+  exportKey: ExportTableKey;
+  totalLabel: string;
+}) {
+  const scopeEntries = deptEntries.filter((e) => classFilter(e.class));
+  const entriesWithVersion = scopeEntries.filter((e) => e.version);
+  const completeness = buildScopeCompleteness(scopeEntries);
+  const unmapped = buildUnmappedAccountRows(entriesWithVersion);
+  const hasAnyVersion = entriesWithVersion.length > 0;
+
+  const mappedCodes = new Set(mappingTable.flatMap((m) => Object.values(m.sourceCodes)));
+  const allMappedLines = entriesWithVersion.flatMap((e) => e.version!.lines.filter((l) => mappedCodes.has(l.account.code)));
+  const grandAgg = buildLineAgg(allMappedLines);
+
+  const priorHeadcount = hasAnyVersion ? entriesWithVersion.reduce((sum, e) => sum + (e.version!.priorYearHeadcount ?? 0), 0) : null;
+  const budgetHeadcount = hasAnyVersion ? entriesWithVersion.reduce((sum, e) => sum + e.version!.budgetYearHeadcount, 0) : null;
+
+  const rows: TableRow[] = [
+    {
       bold: true,
-      cells: metricsRowCells("—", "管銷研費用（目前僅財務管理處）", metricsForLines(financeVersion.lines)),
-    });
-
-    // 3-7. detail accounts per category, each followed by its subtotal.
-    for (const category of CATEGORY_ORDER) {
-      const linesInCategory = financeVersion.lines
-        .filter((l) => l.account.commonCategory === category)
-        .sort((a, b) => (a.account.sourceSeq ?? 0) - (b.account.sourceSeq ?? 0));
-      for (const line of linesInCategory) {
-        rows.push({
-          cells: metricsRowCells(String(line.account.sourceSeq ?? "—"), line.account.name, metricsForLines([line])),
-        });
-      }
-      rows.push({
-        background: COLOR.subtotalBg,
-        bold: true,
-        cells: metricsRowCells("—", `${CATEGORY_LABELS[category]}小計`, metricsForLines(linesInCategory)),
-      });
-    }
-
-    // 8. 管銷研費用總計
-    rows.push({
-      background: COLOR.totalBg,
+      background: HEADCOUNT_ROW_BG,
+      cells: [
+        cell("1", false, "left"),
+        cell("", false, "left"),
+        textCell("部門人數"),
+        { ...formatCountCell(priorHeadcount) },
+        { ...formatCountCell(budgetHeadcount) },
+        cell("—"),
+        cell("—"),
+        cell("—"),
+        cell("—"),
+      ],
+    },
+    {
       bold: true,
-      cells: metricsRowCells("—", "管銷研費用總計", metricsForLines(financeVersion.lines)),
-    });
-  }
+      background: COLOR.totalBg,
+      cells: reportingRowCells("2", "", totalLabel, grandAgg),
+    },
+    ...mappingTable.map((mapping) => ({
+      cells: reportingRowCells(String(mapping.order + 2), mapping.reportingAccountKey, mapping.reportingAccountName, buildReportingAccountAgg(entriesWithVersion, mapping)),
+    })),
+  ];
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-slate-600">
-          管銷研範圍：營業單位（含海外單位）、管理單位、研發單位——<strong>排除所有生產單位</strong>。
-          目前僅包含財務管理處測試資料，尚非全公司最終管銷研合計；其他部門尚未編製時不計入合計。
-        </p>
-        <ExportButtons tableKey="sga" scope={dataScope} />
+        <p className="text-sm text-slate-600">{scopeDescription}</p>
+        <ExportButtons tableKey={exportKey} scope={dataScope} />
       </div>
-      <SummaryBanner sgaAgg={financeAgg} dataScope={dataScope} />
-      {financeVersion ? (
-        <StickyReportTable
-          frozenColCount={2}
-          colWidths={ACCOUNT_COL_WIDTHS}
-          headerGroups={ACCOUNT_HEADER_GROUPS}
-          headerLabels={ACCOUNT_HEADER_LABELS}
-          rows={rows}
-          maxHeightPx={560}
-        />
+      <CompletenessBanner completeness={completeness} />
+      {hasAnyVersion ? (
+        <>
+          <SectionTitle>部門總覽</SectionTitle>
+          <StickyReportTable
+            frozenColCount={1}
+            colWidths={[180, 90, 140, 140, 130, 150, 100, 100, 100, 100]}
+            headerGroups={[
+              { label: "部門", span: 2 },
+              { label: "2026推估", span: 1 },
+              { label: "2027目標計畫", span: 3 },
+              { label: "備註", span: 4 },
+            ]}
+            headerLabels={["部門", "狀態", "費用金額", "不含新員", "新員", "合計", "", "", "", ""]}
+            rows={DeptOverviewRows(entriesWithVersion)}
+            maxHeightPx={280}
+          />
+          <SectionTitle>科目別彙總（每個報表科目一列，不重複列出部門）</SectionTitle>
+          <StickyReportTable
+            frozenColCount={3}
+            colWidths={REPORTING_COL_WIDTHS}
+            headerGroups={REPORTING_HEADER_GROUPS}
+            headerLabels={REPORTING_HEADER_LABELS}
+            rows={rows}
+            maxHeightPx={560}
+          />
+          <UnmappedAccountsSection rows={unmapped} />
+        </>
       ) : (
-        <p className="rounded border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-          財務管理處{financeNotInScopeStatusLabel(rawFinanceVersion, dataScope)}
-          ，尚無 2027 年度資料可供彙總（現有 2026 年度預算資料不會顯示於本欄）。
-        </p>
+        <p className="rounded border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">尚無部門已建立 2027 年度草稿，暫無資料可供彙總。</p>
       )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Tab 3: 生產科目彙總 - no production data exists yet, every figure is "—".
+// Tab 2: 管銷研科目彙總 (營業＋管理＋研發 - 排除生產)
 // ---------------------------------------------------------------------------
 
-function ProductionTab({
-  financeAgg,
-  dataScope,
-}: {
-  financeAgg: ReturnType<typeof buildFinanceAgg>;
-  dataScope: BudgetDataScope;
-}) {
-  const rows: TableRow[] = PRODUCTION_PLACEHOLDER_ROWS.map((r) => ({
-    background: r.kind === "total" ? COLOR.totalBg : r.kind === "subtotal" ? COLOR.subtotalBg : undefined,
-    bold: r.kind !== "detail",
-    cells: [
-      cell("—", false, "left"),
-      textCell(r.label),
-      cell("—"),
-      cell("—"),
-      cell("—"),
-      cell("—"),
-      cell("—"),
-      cell("—"),
-      cell("—"),
-      cell("—"),
-    ],
-  }));
-
+function SgaTab({ deptEntries, dataScope }: { deptEntries: DeptSummaryEntry[]; dataScope: BudgetDataScope }) {
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-slate-600">生產費用獨立列示，不併入管銷研。</p>
-        <ExportButtons tableKey="production" scope={dataScope} />
-      </div>
-      <SummaryBanner sgaAgg={financeAgg} dataScope={dataScope} />
-      <p className="mb-3 rounded bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700">狀態：尚未匯入生產部門資料</p>
-      <StickyReportTable
-        frozenColCount={2}
-        colWidths={ACCOUNT_COL_WIDTHS}
-        headerGroups={ACCOUNT_HEADER_GROUPS}
-        headerLabels={ACCOUNT_HEADER_LABELS}
-        rows={rows}
-        maxHeightPx={400}
-      />
-    </div>
+    <ReportingAccountTab
+      deptEntries={deptEntries}
+      dataScope={dataScope}
+      classFilter={isSgaClass}
+      mappingTable={SGA_REPORTING_ACCOUNTS}
+      scopeDescription="管銷研範圍：營業單位（含海外單位）、管理單位、研發單位——排除所有生產單位。僅納入已有 2027 年度草稿（含 DRAFT）的部門；尚未編製的部門不計入合計。"
+      exportKey="sga"
+      totalLabel="管銷研費用總計"
+    />
   );
 }
 
 // ---------------------------------------------------------------------------
-// Shared 全公司費用合計區 banner, shown above the 管銷研/生產 account tables.
+// Tab 3: 生產科目彙總
 // ---------------------------------------------------------------------------
 
-function SummaryBanner({
-  sgaAgg,
-  dataScope,
-}: {
-  sgaAgg: ReturnType<typeof buildFinanceAgg>;
-  dataScope: BudgetDataScope;
-}) {
-  const colWidths = [160, 100, 100, 100, 100, 100, 90];
-  const headerGroups: HeaderGroup[] = [{ label: "全公司費用合計區", span: 7 }];
-  const headerLabels = ["項目", "2026推估", "2027不含新員", "2027新員", "2027合計", "增減金額", "增減率"];
-
-  const sgaRow: TableRow = sgaAgg
-    ? {
-        background: COLOR.subtotalBg,
-        bold: true,
-        cells: [
-          textCell("管銷研費用合計（暫計，僅財務管理處）"),
-          { ...formatAmountCell(sgaAgg.priorTotal) },
-          { ...formatAmountCell(sgaAgg.excludingNewTotal) },
-          { ...formatAmountCell(sgaAgg.newHireTotal) },
-          { ...formatAmountCell(sgaAgg.grandTotal) },
-          { ...formatAmountCell(sgaAgg.delta) },
-          { ...formatGrowthRateCell(sgaAgg.growth) },
-        ],
-      }
-    : {
-        background: COLOR.subtotalBg,
-        bold: true,
-        cells: [textCell("管銷研費用合計（暫計）"), cell("—"), cell("—"), cell("—"), cell("—"), cell("—"), cell("—")],
-      };
-
-  const productionRow: TableRow = {
-    cells: [textCell("生產費用合計"), cell("—"), cell("—"), cell("—"), cell("—"), cell("—"), cell("—")],
-  };
-
-  const grandRow: TableRow = {
-    background: COLOR.totalBg,
-    bold: true,
-    cells: [textCell("全公司費用總計"), cell("—"), cell("—"), cell("—"), cell("—"), cell("—"), cell("—")],
-  };
-
+function ProductionTab({ deptEntries, dataScope }: { deptEntries: DeptSummaryEntry[]; dataScope: BudgetDataScope }) {
   return (
-    <div className="mb-4">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-slate-700">全公司費用合計</h4>
-        <ExportButtons tableKey="company" scope={dataScope} />
-      </div>
-      <StickyReportTable
-        frozenColCount={1}
-        colWidths={colWidths}
-        headerGroups={headerGroups}
-        headerLabels={headerLabels}
-        rows={[sgaRow, productionRow, grandRow]}
-        maxHeightPx={220}
-      />
-      <p className="mt-2 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-        勾稽狀態：全公司費用尚無法完成彙總：生產單位資料尚未匯入。（正式階段公式：管銷研費用合計＋生產費用合計＝全公司費用總計）
-      </p>
-    </div>
+    <ReportingAccountTab
+      deptEntries={deptEntries}
+      dataScope={dataScope}
+      classFilter={isProductionClass}
+      mappingTable={PRODUCTION_REPORTING_ACCOUNTS}
+      scopeDescription="生產費用獨立列示，不併入管銷研；僅納入生產部、台灣廠品保處。"
+      exportKey="production"
+      totalLabel="生產費用總計"
+    />
   );
 }

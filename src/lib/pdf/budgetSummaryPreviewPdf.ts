@@ -85,6 +85,19 @@ function cellDisplay(cell: RawCell): { text: string; negative: boolean; align: "
       const f = formatGrowthRateCell(cell.value);
       return { text: f.text, negative: f.negative, align: "right" };
     }
+    case "date": {
+      // Never produced by the old single-department builders this PDF
+      // reads (they emit a pre-formatted text cell for dates instead) - see
+      // RawCell's own doc comment in summaryReportData.ts. Handled here
+      // only so the switch stays exhaustive if that ever changes; reads
+      // back the UTC-midnight instant taipeiDateOnly() encodes directly,
+      // no timezone conversion needed.
+      if (cell.value === null) return { text: "—", negative: false, align: "right" };
+      const y = cell.value.getUTCFullYear();
+      const m = String(cell.value.getUTCMonth() + 1).padStart(2, "0");
+      const d = String(cell.value.getUTCDate()).padStart(2, "0");
+      return { text: `${y}.${m}.${d}`, negative: false, align: "right" };
+    }
   }
 }
 

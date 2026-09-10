@@ -17,6 +17,7 @@ export async function resetDatabase() {
     prisma.passwordResetToken.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.userDepartmentScope.deleteMany(),
+    prisma.invitation.deleteMany(),
     prisma.user.deleteMany(),
     prisma.department.deleteMany(),
   ]);
