@@ -47,6 +47,18 @@ enum DomesticOverseas {
   OVERSEAS
 }
 
+// Lifecycle of one department-scoped invitation (see Invitation model).
+// PENDING is the only state a token can still be redeemed from; every other
+// state is terminal - acceptInvitation() must never transition out of
+// ACCEPTED/EXPIRED/LOCKED/REVOKED.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED // set lazily when the 21-day window has passed - see isInvitationExpired()
+  LOCKED // 5 failed token attempts reached
+  REVOKED // an admin explicitly revoked it before it was ever accepted
+}
+
 // Which chart of accounts an Account row belongs to. Exists specifically so
 // account SELECTION (which accounts are "applicable" when a brand-new
 // BudgetVersion draft is created for a department) never has to guess from
@@ -166,10 +178,23 @@ model User {
   // Reserved integration points for future company SSO / MFA (see SECURITY.md).
   ssoSubject        String?   @unique
   mfaEnabled        Boolean   @default(false)
+  // Bumped by revokeAllSessions() (lib/auth/session.ts) whenever an admin
+  // needs to force every existing login for this user to stop working
+  // immediately - every JWT session cookie embeds the sessionVersion that
+  // was current when it was issued, and getCurrentUser() rejects any
+  // session whose embedded value no longer matches this column. This is
+  // the ONLY revocation mechanism for an otherwise-stateless JWT session:
+  // there is no server-side session table to delete rows from, so
+  // "log this user out everywhere" has to work by making old tokens fail
+  // validation rather than by destroying them.
+  sessionVersion    Int       @default(0)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
   departmentScopes             UserDepartmentScope[]
+  invitationsCreated           Invitation[]          @relation("InvitationCreatedBy")
+  invitationsAccepted          Invitation[]          @relation("InvitationAcceptedBy")
+  invitationsRevoked           Invitation[]          @relation("InvitationRevokedBy")
   preparedVersions             BudgetVersion[]       @relation("PreparedBy")
   submittedVersions            BudgetVersion[]       @relation("SubmittedBy")
   reviewedVersions             BudgetVersion[]       @relation("ReviewedBy")
@@ -200,6 +225,55 @@ model UserDepartmentScope {
   department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
 
   @@unique([userId, departmentId])
+}
+
+// One department-scoped invitation: "this email may claim access to this
+// one department by proving possession of a token an admin generated".
+// Deliberately department-scoped, not user-scoped - the same email can
+// hold any number of PENDING/ACCEPTED invitations across different
+// departments at once (see Stage 2B-3 三部門邀請登入 Pilot), each with its
+// own independent token/expiry/attempt-count/status. Accepting one never
+// touches another: a locked or expired invitation for department A must
+// never block or auto-fail a still-valid invitation for department B.
+//
+// `id` is the ONLY thing that ever appears in the invitation URL
+// (/invite/[id]) or the invitation email - it identifies WHICH invitation
+// a token-entry attempt is against, but knowing it grants nothing by
+// itself. The actual secret (a random 32-byte token, shown once to the
+// admin who created it and delivered to the invitee out of band - see
+// docs on the create-invitation response) is never stored in plaintext,
+// never embedded in the URL, and never written to any log or AuditLog
+// row - only `tokenHash` (sha256 of the real token) is persisted, mirroring
+// PasswordResetToken's own tokenHash convention below.
+model Invitation {
+  id           String           @id @default(cuid())
+  departmentId String
+  email        String
+  tokenHash    String           @unique
+  status       InvitationStatus @default(PENDING)
+  // Wrong-token submissions against this specific invitation. Reset is
+  // never allowed once LOCKED - an admin must revoke and issue a fresh
+  // invitation (see requirement: "超過後鎖定該邀請", not "解鎖該邀請").
+  attemptCount Int              @default(0)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+
+  createdById      String
+  acceptedByUserId String?
+  revokedById      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  createdBy  User       @relation("InvitationCreatedBy", fields: [createdById], references: [id])
+  acceptedBy User?      @relation("InvitationAcceptedBy", fields: [acceptedByUserId], references: [id])
+  revokedBy  User?      @relation("InvitationRevokedBy", fields: [revokedById], references: [id])
+
+  @@index([email])
+  @@index([departmentId])
+  @@index([status])
 }
 
 model PasswordResetToken {
@@ -301,6 +375,7 @@ model Department {
   budgetVersions BudgetVersion[]
   salaryDataRows SalaryDataSource[]
   memoryEntries  MemoryEntry[]
+  invitations    Invitation[]
 
   @@index([class])
 }

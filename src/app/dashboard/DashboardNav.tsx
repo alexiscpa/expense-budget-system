@@ -85,5 +85,6 @@ export function staticCrumbForPath(pathname: string): string | null {
   if (pathname === "/dashboard/reports/budget-summary-preview") return "費用預算彙總表（版型預覽）";
   if (pathname === "/dashboard/reports") return "報表";
   if (pathname === "/dashboard/budget-progress") return "2027年度預算編製進度 - 部門明細";
+  if (pathname === "/dashboard/invitations") return "部門邀請管理（Pilot 測試）";
   return null;
 }

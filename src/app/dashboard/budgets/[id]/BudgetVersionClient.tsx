@@ -141,7 +141,7 @@ export function BudgetVersionClient({
   version,
   canSeeSalary,
 }: {
-  currentUser: { id: string; role: Role; companyWide: boolean };
+  currentUser: { id: string; email: string; role: Role; companyWide: boolean };
   version: VersionDto;
   canSeeSalary: boolean;
 }) {
@@ -157,6 +157,11 @@ export function BudgetVersionClient({
   const [reasonPrompt, setReasonPrompt] = useState<null | "return" | "reject" | "adjustment">(null);
   const [reasonText, setReasonText] = useState("");
   const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
+  // 「預算送出前須再次確認目前登入身分」(Stage 2B-3 三部門邀請登入 Pilot) -
+  // 送出／重新送出前一律先顯示目前登入帳號，要求使用者明確按下確認，而非直接
+  // 送出；確認後才把 currentUser.email 一併帶入 submit/resubmit API 呼叫，
+  // 由伺服器端逐字比對目前 session 的真實 email（見對應 route.ts）。
+  const [confirmingSubmit, setConfirmingSubmit] = useState<null | "submit" | "resubmit">(null);
   const [backNavBusy, setBackNavBusy] = useState(false);
 
   // See lib/client/pendingSave.ts for what this tracks and why - one
@@ -321,9 +326,19 @@ export function BudgetVersionClient({
             : action === "review"
               ? "review"
               : action;
+      // submit/resubmit require the caller to have just re-confirmed their
+      // own login identity (see confirmingSubmit above) - the server
+      // independently re-checks confirmedEmail against the real session,
+      // this is not merely a client-side courtesy.
+      const body =
+        action === "submit" || action === "resubmit"
+          ? { confirmedEmail: currentUser.email }
+          : reason
+            ? { reason }
+            : undefined;
       await apiFetch(`/api/budgets/${version.id}/${path}`, {
         method: "POST",
-        body: reason ? JSON.stringify({ reason }) : undefined,
+        body: body ? JSON.stringify(body) : undefined,
       });
       router.refresh();
     } catch (err) {
@@ -332,6 +347,7 @@ export function BudgetVersionClient({
       setBusy(false);
       setReasonPrompt(null);
       setReasonText("");
+      setConfirmingSubmit(null);
     }
   }
 
@@ -485,6 +501,15 @@ export function BudgetVersionClient({
             >
               {ACTION_LABEL[action]}
             </button>
+          ) : action === "submit" || action === "resubmit" ? (
+            <button
+              key={action}
+              disabled={busy}
+              onClick={() => setConfirmingSubmit(action)}
+              className="rounded bg-brand-600 px-4 py-2 text-sm text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {ACTION_LABEL[action]}
+            </button>
           ) : (
             <button
               key={action}
@@ -497,6 +522,29 @@ export function BudgetVersionClient({
           )
         )}
       </div>
+
+      {confirmingSubmit && (
+        <div className="mt-4 max-w-md rounded border border-blue-300 bg-blue-50 p-4">
+          <p className="mb-1 text-sm font-medium text-blue-900">請再次確認您目前登入的身分</p>
+          <p className="mb-3 text-sm text-blue-800">
+            登入帳號：<strong>{currentUser.email}</strong>
+            <br />
+            即將以此身分{ACTION_LABEL[confirmingSubmit]}「{version.department.name}」{version.fiscalYear} 年度預算。
+          </p>
+          <div className="flex gap-2">
+            <button
+              disabled={busy}
+              onClick={() => runAction(confirmingSubmit)}
+              className="rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+            >
+              確認身分並{ACTION_LABEL[confirmingSubmit]}
+            </button>
+            <button onClick={() => setConfirmingSubmit(null)} className="rounded border px-3 py-1 text-sm">
+              取消
+            </button>
+          </div>
+        </div>
+      )}
 
       {reasonPrompt && (
         <div className="mt-4 max-w-md rounded border border-slate-300 p-4">

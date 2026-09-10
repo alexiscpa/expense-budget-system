@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
@@ -13,10 +14,12 @@ import { Stage2ASeedPanel } from "./Stage2ASeedPanel";
 import { CreateBudgetVersionForm } from "./CreateBudgetVersionForm";
 import { BudgetOwnerInitPanel } from "./BudgetOwnerInitPanel";
 import { Stage2bProgressCompactSummary } from "./Stage2bProgressCompactSummary";
+import { DepartmentSwitcher } from "./DepartmentSwitcher";
 import { formatTaipeiDate } from "@/lib/format/date";
 import { isVercelProductionEnvironment } from "@/lib/env";
 import { loadStage2bProgress } from "@/lib/reports/stage2bProgress";
 import { BUDGET_OWNER_ROSTER } from "@/lib/masterdata/budgetOwnerRoster";
+import { ACTIVE_DEPARTMENT_COOKIE } from "@/lib/session/activeDepartmentCookie";
 
 export const dynamic = "force-dynamic";
 
@@ -37,9 +40,26 @@ export default async function DashboardPage() {
   if (!user) redirect("/login");
 
   const accessibleDepartmentIds = await getAccessibleDepartmentIds(user);
+
+  // "目前檢視部門" (multi-department switching, Stage 2B-3 三部門邀請登入
+  // Pilot) - the cookie is a display preference only (see
+  // /api/session/active-department's own doc comment), so it is re-validated
+  // against the caller's REAL accessible departments on every render rather
+  // than trusted as-is: a cookie value for a department the caller has since
+  // lost access to (or never had) is silently ignored, never honored.
+  const requestedActiveDepartmentId = cookies().get(ACTIVE_DEPARTMENT_COOKIE)?.value ?? null;
+  const activeDepartmentId =
+    requestedActiveDepartmentId && (accessibleDepartmentIds === null || accessibleDepartmentIds.includes(requestedActiveDepartmentId))
+      ? requestedActiveDepartmentId
+      : null;
+
   const versions = await prisma.budgetVersion.findMany({
     where: {
-      departmentId: accessibleDepartmentIds === null ? undefined : { in: accessibleDepartmentIds },
+      departmentId: activeDepartmentId
+        ? activeDepartmentId
+        : accessibleDepartmentIds === null
+          ? undefined
+          : { in: accessibleDepartmentIds },
     },
     include: { department: true },
     orderBy: [{ fiscalYear: "desc" }, { versionNumber: "desc" }],
@@ -48,16 +68,18 @@ export default async function DashboardPage() {
 
   const bypassActive = isAuthBypassEnabled();
   const canCreateDraft = hasCapability(user.role, "budget.edit_own_department") || isTestBypassUser(user);
-  const departmentOptions = canCreateDraft
-    ? await prisma.department.findMany({
-        where: {
-          isActive: true,
-          id: accessibleDepartmentIds === null ? undefined : { in: accessibleDepartmentIds },
-        },
-        select: { id: true, code: true, name: true },
-        orderBy: { code: "asc" },
-      })
-    : [];
+  // Fetched whenever the caller is department-scoped (not company-wide) -
+  // both to populate CreateBudgetVersionForm's dropdown (canCreateDraft
+  // viewers) and to drive DepartmentSwitcher (any scoped viewer with more
+  // than one accessible department, canCreateDraft or not).
+  const departmentOptions =
+    accessibleDepartmentIds !== null && accessibleDepartmentIds.length > 0
+      ? await prisma.department.findMany({
+          where: { isActive: true, id: { in: accessibleDepartmentIds } },
+          select: { id: true, code: true, name: true },
+          orderBy: { code: "asc" },
+        })
+      : [];
   const demoSeedStatus = bypassActive ? await getDemoSeedStatus() : null;
   const stage2aSeedStatus = bypassActive ? await getStage2ASeedStatus() : null;
 
@@ -86,8 +108,20 @@ export default async function DashboardPage() {
       {bypassActive && <DemoSeedPanel initialStatus={demoSeedStatus} />}
       {bypassActive && <Stage2ASeedPanel initialStatus={stage2aSeedStatus} />}
 
+      {hasCapability(user.role, "user.manage") && (
+        <p className="mb-4">
+          <Link href="/dashboard/invitations" className="text-sm text-brand-600 hover:underline">
+            部門邀請管理（Pilot 測試）→
+          </Link>
+        </p>
+      )}
+
       {showMasterDataInitPanel && (
         <BudgetOwnerInitPanel missingCount={missingRosterCount} rosterSize={BUDGET_OWNER_ROSTER.length} />
+      )}
+
+      {departmentOptions.length > 1 && (
+        <DepartmentSwitcher departments={departmentOptions} activeDepartmentId={activeDepartmentId} />
       )}
 
       {canViewAllDepartments && (

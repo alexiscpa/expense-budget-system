@@ -86,3 +86,30 @@ export const dualControlRequestSchema = z.object({
   targetEntityId: z.string().min(1),
   reason: z.string().trim().min(1).max(2000),
 });
+
+export const createInvitationSchema = z.object({
+  departmentId: z.string().min(1),
+  email: z.string().email().max(254),
+});
+
+export const acceptInvitationSchema = z.object({
+  token: z.string().min(10).max(500),
+  remember: z.boolean().optional(),
+});
+
+export const revokeDepartmentAccessSchema = z.object({
+  userId: z.string().min(1),
+  departmentId: z.string().min(1),
+});
+
+export const switchActiveDepartmentSchema = z.object({
+  departmentId: z.string().min(1),
+});
+
+// Requirement: "預算送出前須再次確認目前登入身分" - the caller must echo
+// back the email they believe they are currently logged in as; the route
+// rejects the submit outright if it doesn't match the real session's email
+// exactly (case-insensitive), rather than silently proceeding.
+export const submitBudgetSchema = z.object({
+  confirmedEmail: z.string().email().max(254),
+});

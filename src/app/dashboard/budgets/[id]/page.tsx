@@ -50,7 +50,7 @@ export default async function BudgetVersionPage({ params }: { params: { id: stri
 
   return (
     <BudgetVersionClient
-      currentUser={{ id: user.id, role: user.role, companyWide: user.companyWide }}
+      currentUser={{ id: user.id, email: user.email, role: user.role, companyWide: user.companyWide }}
       version={JSON.parse(
         JSON.stringify(version, (_k, v) => (typeof v === "object" && v !== null && "toFixed" in v ? v.toString() : v))
       )}

@@ -60,6 +60,7 @@ describe("Dashboard route inventory", () => {
         "/dashboard",
         "/dashboard/budget-progress",
         "/dashboard/budgets/[id]",
+        "/dashboard/invitations",
         "/dashboard/reports",
         "/dashboard/reports/budget-summary-preview",
       ].sort()
