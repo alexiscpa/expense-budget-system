@@ -16,6 +16,10 @@ describe("staticCrumbForPath - breadcrumb label for routes whose title never dep
     expect(staticCrumbForPath("/dashboard")).toBeNull();
   });
 
+  it("returns the fixed label for the Stage 2B-2 budget-progress detail page", () => {
+    expect(staticCrumbForPath("/dashboard/budget-progress")).toBe("2027年度預算編製進度 - 部門明細");
+  });
+
   it("returns null for the dynamic budget version route - that page supplies its own trailing crumb once it has loaded department/version data", () => {
     expect(staticCrumbForPath("/dashboard/budgets/some-version-id")).toBeNull();
   });
@@ -52,7 +56,13 @@ describe("Dashboard route inventory", () => {
   it("matches the exact known set of /dashboard/** page routes - update this list (and DashboardNav's staticCrumbForPath / the target page's useDashboardBreadcrumb) when adding a new one", () => {
     const routes = findPageRoutes(DASHBOARD_DIR).sort();
     expect(routes).toEqual(
-      ["/dashboard", "/dashboard/budgets/[id]", "/dashboard/reports", "/dashboard/reports/budget-summary-preview"].sort()
+      [
+        "/dashboard",
+        "/dashboard/budget-progress",
+        "/dashboard/budgets/[id]",
+        "/dashboard/reports",
+        "/dashboard/reports/budget-summary-preview",
+      ].sort()
     );
   });
 
