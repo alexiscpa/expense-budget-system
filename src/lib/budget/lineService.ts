@@ -123,7 +123,26 @@ export async function createBudgetVersionDraft(
   // Only accounts belonging to this department's own class (M/S/R/P) are
   // applicable - a management department must never see production or
   // sales accounts and vice versa.
-  const accounts = await prisma.account.findMany({ where: { isActive: true, majorCategory: department.class } });
+  //
+  // forceEditable additionally excludes any account carrying a sourceSeq
+  // (Account.sourceSeq IS NOT NULL) - the marker seedDemoMasterData.ts
+  // uses for the SEPARATE, unrelated 62-item M-class-only demo chart it
+  // imports from "2026年度費用預算V2--財務.xlsx" for 17203's own one-off
+  // manual demo walkthrough. That chart happens to duplicate the same 62
+  // M-class concepts already present in the canonical, all-four-class
+  // chart (stage2aAccounts.ts's STAGE2A_ACCOUNTS, sourceSeq always null,
+  // sourced from the SAME 2025費用總表 workbook the Stage 2B-1/2B-2
+  // department manifest itself is built from) - so a plain
+  // majorCategory-only filter silently doubles a Stage 2B-2 M-class
+  // department's applicable-account count to 124 instead of 62 (S/R/P are
+  // unaffected: seedDemoMasterData never imports anything for those
+  // classes). Never applied when forceEditable is false, so 17203's own
+  // real createBudgetVersionDraft path - if ever invoked directly, outside
+  // the Stage 2B-2 roster flow - keeps using its own established sourceSeq
+  // chart untouched.
+  const accounts = await prisma.account.findMany({
+    where: { isActive: true, majorCategory: department.class, ...(forceEditable ? { sourceSeq: null } : {}) },
+  });
   if (accounts.length === 0) {
     throw new ApiError(422, "會計科目主檔尚未匯入，請聯絡財務管理員先完成科目主檔匯入");
   }
